@@ -3,7 +3,7 @@ name = "infoblox-ddi-mcp"
 version = "1.0.0"
 description = "Infoblox DDI MCP Server — 20 intent-level workflow tools for agentic AI integration"
 readme = "README.md"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "Igor Racic" },
