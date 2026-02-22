@@ -8,10 +8,10 @@ API Documentation: https://csp.infoblox.com/apidoc/docs/Insights
 """
 
 import os
+from typing import Any
+
 import requests
 import structlog
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 
 # Initialize structured logger
 logger = structlog.get_logger(__name__)
@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 class InsightsClient:
     """Client for Infoblox SOC Insights API - Threat Intelligence & Security Monitoring"""
 
-    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None):
         """
         Initialize the Insights API client.
 
@@ -35,10 +35,7 @@ class InsightsClient:
             raise ValueError("INFOBLOX_API_KEY environment variable or api_key parameter is required")
 
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Token {self.api_key}",
-            "Content-Type": "application/json"
-        })
+        self.session.headers.update({"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"})
 
         # Set timeout for all requests (connect timeout, read timeout)
         self.timeout = (5, 30)
@@ -47,23 +44,23 @@ class InsightsClient:
             "insights_client_initialized",
             base_url=self.base_url,
             timeout_connect=self.timeout[0],
-            timeout_read=self.timeout[1]
+            timeout_read=self.timeout[1],
         )
 
-    def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+    def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
         """Make an HTTP request to the Insights API."""
         url = f"{self.base_url}/api/insights/v1{endpoint}"
 
         # Add timeout if not already specified
-        if 'timeout' not in kwargs:
-            kwargs['timeout'] = self.timeout
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = self.timeout
 
         try:
             response = self.session.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json() if response.text else {}
         except requests.exceptions.RequestException as e:
-            return {"error": str(e), "status_code": getattr(e.response, 'status_code', None)}
+            return {"error": str(e), "status_code": getattr(e.response, "status_code", None)}
 
     # ============================================================
     # Insights Management
@@ -71,12 +68,12 @@ class InsightsClient:
 
     def list_insights(
         self,
-        status: Optional[str] = None,
-        threat_type: Optional[str] = None,
-        priority: Optional[str] = None,
+        status: str | None = None,
+        threat_type: str | None = None,
+        priority: str | None = None,
         limit: int = 100,
-        offset: int = 0
-    ) -> Dict[str, Any]:
+        offset: int = 0,
+    ) -> dict[str, Any]:
         """
         List security insights with optional filtering.
 
@@ -100,7 +97,7 @@ class InsightsClient:
 
         return self._request("GET", "/insights", params=params)
 
-    def get_insight(self, insight_id: str) -> Dict[str, Any]:
+    def get_insight(self, insight_id: str) -> dict[str, Any]:
         """
         Get detailed information for a specific security insight.
 
@@ -112,12 +109,7 @@ class InsightsClient:
         """
         return self._request("GET", f"/insights/{insight_id}")
 
-    def update_insight_status(
-        self,
-        insight_ids: List[str],
-        status: str,
-        comment: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def update_insight_status(self, insight_ids: list[str], status: str, comment: str | None = None) -> dict[str, Any]:
         """
         Update the status of one or more insights.
 
@@ -129,10 +121,7 @@ class InsightsClient:
         Returns:
             Dict with update results
         """
-        payload = {
-            "ids": insight_ids,
-            "status": status
-        }
+        payload = {"ids": insight_ids, "status": status}
         if comment:
             payload["comment"] = comment
 
@@ -141,11 +130,11 @@ class InsightsClient:
     def get_insight_indicators(
         self,
         insight_id: str,
-        confidence: Optional[str] = None,
-        actor: Optional[str] = None,
-        action: Optional[str] = None,
-        limit: int = 1000
-    ) -> Dict[str, Any]:
+        confidence: str | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
         """
         Get threat indicators associated with a security insight.
 
@@ -172,14 +161,14 @@ class InsightsClient:
     def get_insight_events(
         self,
         insight_id: str,
-        threat_level: Optional[str] = None,
-        confidence: Optional[str] = None,
-        source_ip: Optional[str] = None,
-        device_ip: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-        limit: int = 1000
-    ) -> Dict[str, Any]:
+        threat_level: str | None = None,
+        confidence: str | None = None,
+        source_ip: str | None = None,
+        device_ip: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
         """
         Get security events associated with an insight.
 
@@ -215,12 +204,12 @@ class InsightsClient:
     def get_insight_assets(
         self,
         insight_id: str,
-        os_version: Optional[str] = None,
-        user: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-        limit: int = 1000
-    ) -> Dict[str, Any]:
+        os_version: str | None = None,
+        user: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
         """
         Get affected assets (devices, IPs, MACs) for a security insight.
 
@@ -248,11 +237,8 @@ class InsightsClient:
         return self._request("GET", f"/insights/{insight_id}/assets", params=params)
 
     def get_insight_comments(
-        self,
-        insight_id: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, insight_id: str, start_date: str | None = None, end_date: str | None = None
+    ) -> dict[str, Any]:
         """
         Get historical comments and status changes for an insight.
 
@@ -276,12 +262,7 @@ class InsightsClient:
     # Policy Configuration Insights
     # ============================================================
 
-    def list_analytics_insights(
-        self,
-        status: Optional[str] = None,
-        limit: int = 100,
-        offset: int = 0
-    ) -> Dict[str, Any]:
+    def list_analytics_insights(self, status: str | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         """
         List policy analytics insights.
 
@@ -299,7 +280,7 @@ class InsightsClient:
 
         return self._request("GET", "/config-insights/analytics", params=params)
 
-    def get_analytics_insight(self, analytic_insight_id: str) -> Dict[str, Any]:
+    def get_analytics_insight(self, analytic_insight_id: str) -> dict[str, Any]:
         """
         Get specific policy analytics insight details.
 
@@ -312,11 +293,8 @@ class InsightsClient:
         return self._request("GET", f"/config-insights/analytics/{analytic_insight_id}")
 
     def list_policy_check_insights(
-        self,
-        check_type: Optional[str] = None,
-        limit: int = 100,
-        offset: int = 0
-    ) -> Dict[str, Any]:
+        self, check_type: str | None = None, limit: int = 100, offset: int = 0
+    ) -> dict[str, Any]:
         """
         List policy compliance check insights.
 

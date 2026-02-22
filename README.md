@@ -1,3 +1,9 @@
+[![CI](https://github.com/iracic/infoblox-ddi-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/iracic/infoblox-ddi-mcp/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
+[![PyPI](https://img.shields.io/pypi/v/infoblox-ddi-mcp.svg)](https://pypi.org/project/infoblox-ddi-mcp/)
+
 # Infoblox DDI — MCP Server
 
 > **20 intent-level workflow tools** for managing Infoblox BloxOne DDI via the Model Context Protocol.

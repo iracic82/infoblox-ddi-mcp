@@ -5,11 +5,12 @@ Provides lightweight metrics collection without external dependencies.
 Metrics are collected in-memory and can be exposed via HTTP endpoint.
 """
 
-import time
 import threading
-from typing import Dict, List, Optional, Any
+import time
 from collections import defaultdict, deque
 from datetime import datetime
+from typing import Any
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -40,12 +41,7 @@ class MetricsCollector:
         logger.info("metrics_collector_initialized")
 
     def record_api_call(
-        self,
-        service: str,
-        endpoint: str,
-        duration_ms: float,
-        status_code: int,
-        error: Optional[str] = None
+        self, service: str, endpoint: str, duration_ms: float, status_code: int, error: str | None = None
     ):
         """Record an API call with latency"""
         with self._lock:
@@ -69,7 +65,7 @@ class MetricsCollector:
             endpoint=endpoint,
             duration_ms=round(duration_ms, 2),
             status_code=status_code,
-            error=error
+            error=error,
         )
 
     def record_cache_hit(self, service: str, method: str):
@@ -89,21 +85,14 @@ class MetricsCollector:
         with self._lock:
             self.circuit_breaker_opens[service] += 1
 
-        logger.warning(
-            "circuit_breaker_opened",
-            service=service,
-            total_opens=self.circuit_breaker_opens[service]
-        )
+        logger.warning("circuit_breaker_opened", service=service, total_opens=self.circuit_breaker_opens[service])
 
     def set_circuit_state(self, service: str, state: str):
         """Update circuit breaker state"""
         with self._lock:
-            self.circuit_states[service] = {
-                "state": state,
-                "updated_at": datetime.utcnow().isoformat()
-            }
+            self.circuit_states[service] = {"state": state, "updated_at": datetime.utcnow().isoformat()}
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get current metrics snapshot"""
         with self._lock:
             return {
@@ -113,27 +102,24 @@ class MetricsCollector:
                 "cache": self._get_cache_metrics(),
                 "latency": self._get_latency_metrics(),
                 "circuit_breakers": dict(self.circuit_states),
-                "errors": self._get_error_metrics()
+                "errors": self._get_error_metrics(),
             }
 
-    def _get_api_call_metrics(self) -> Dict[str, Any]:
+    def _get_api_call_metrics(self) -> dict[str, Any]:
         """Calculate API call metrics"""
         total_calls = sum(self.api_calls.values())
 
         # Group by service
         by_service = defaultdict(lambda: {"total": 0, "by_status": {}})
-        for (service, endpoint, status), count in self.api_calls.items():
+        for (service, _endpoint, status), count in self.api_calls.items():
             by_service[service]["total"] += count
             if status not in by_service[service]["by_status"]:
                 by_service[service]["by_status"][status] = 0
             by_service[service]["by_status"][status] += count
 
-        return {
-            "total": total_calls,
-            "by_service": dict(by_service)
-        }
+        return {"total": total_calls, "by_service": dict(by_service)}
 
-    def _get_cache_metrics(self) -> Dict[str, Any]:
+    def _get_cache_metrics(self) -> dict[str, Any]:
         """Calculate cache metrics"""
         total_hits = sum(self.cache_hits.values())
         total_misses = sum(self.cache_misses.values())
@@ -153,17 +139,17 @@ class MetricsCollector:
             by_method[f"{key[0]}.{key[1]}"] = {
                 "hits": hits,
                 "misses": misses,
-                "hit_rate_percent": round(method_hit_rate, 2)
+                "hit_rate_percent": round(method_hit_rate, 2),
             }
 
         return {
             "total_hits": total_hits,
             "total_misses": total_misses,
             "hit_rate_percent": round(hit_rate, 2),
-            "by_method": by_method
+            "by_method": by_method,
         }
 
-    def _get_latency_metrics(self) -> Dict[str, Any]:
+    def _get_latency_metrics(self) -> dict[str, Any]:
         """Calculate latency percentiles"""
         latency_stats = {}
 
@@ -181,12 +167,12 @@ class MetricsCollector:
                 "p50_ms": round(sorted_durations[int(count * 0.50)], 2),
                 "p95_ms": round(sorted_durations[int(count * 0.95)], 2),
                 "p99_ms": round(sorted_durations[int(count * 0.99)], 2),
-                "avg_ms": round(sum(sorted_durations) / count, 2)
+                "avg_ms": round(sum(sorted_durations) / count, 2),
             }
 
         return latency_stats
 
-    def _get_error_metrics(self) -> Dict[str, Any]:
+    def _get_error_metrics(self) -> dict[str, Any]:
         """Calculate error metrics"""
         total_errors = sum(self.errors.values())
 
@@ -195,62 +181,58 @@ class MetricsCollector:
             key = f"{service}/{error_type}"
             by_type[key] = count
 
-        return {
-            "total": total_errors,
-            "by_type": by_type
-        }
+        return {"total": total_errors, "by_type": by_type}
 
     def get_summary(self) -> str:
         """Get human-readable summary"""
         metrics = self.get_metrics()
 
         lines = [
-            "="*70,
+            "=" * 70,
             "INFOBLOX MCP SERVER - METRICS SUMMARY",
-            "="*70,
+            "=" * 70,
             f"Uptime: {metrics['uptime_seconds']}s",
             "",
             "API Calls:",
             f"  Total: {metrics['api_calls']['total']}",
         ]
 
-        for service, data in metrics['api_calls']['by_service'].items():
+        for service, data in metrics["api_calls"]["by_service"].items():
             lines.append(f"  {service}: {data['total']} calls")
-            for status, count in data['by_status'].items():
+            for status, count in data["by_status"].items():
                 lines.append(f"    - {status}: {count}")
 
-        lines.extend([
-            "",
-            "Cache Performance:",
-            f"  Hit Rate: {metrics['cache']['hit_rate_percent']:.1f}%",
-            f"  Hits: {metrics['cache']['total_hits']}",
-            f"  Misses: {metrics['cache']['total_misses']}"
-        ])
+        lines.extend(
+            [
+                "",
+                "Cache Performance:",
+                f"  Hit Rate: {metrics['cache']['hit_rate_percent']:.1f}%",
+                f"  Hits: {metrics['cache']['total_hits']}",
+                f"  Misses: {metrics['cache']['total_misses']}",
+            ]
+        )
 
-        if metrics['latency']:
+        if metrics["latency"]:
             lines.extend(["", "Latency (ms):"])
-            for endpoint, stats in metrics['latency'].items():
+            for endpoint, stats in metrics["latency"].items():
                 lines.append(f"  {endpoint}:")
                 lines.append(f"    p50: {stats['p50_ms']}ms, p95: {stats['p95_ms']}ms, p99: {stats['p99_ms']}ms")
 
-        if metrics['circuit_breakers']:
+        if metrics["circuit_breakers"]:
             lines.extend(["", "Circuit Breakers:"])
-            for service, state in metrics['circuit_breakers'].items():
+            for service, state in metrics["circuit_breakers"].items():
                 lines.append(f"  {service}: {state['state']}")
 
-        if metrics['errors']['total'] > 0:
-            lines.extend([
-                "",
-                f"Errors: {metrics['errors']['total']} total"
-            ])
+        if metrics["errors"]["total"] > 0:
+            lines.extend(["", f"Errors: {metrics['errors']['total']} total"])
 
-        lines.append("="*70)
+        lines.append("=" * 70)
 
         return "\n".join(lines)
 
 
 # Global singleton instance
-_metrics_collector: Optional[MetricsCollector] = None
+_metrics_collector: MetricsCollector | None = None
 _lock = threading.Lock()
 
 
@@ -267,7 +249,7 @@ def get_metrics_collector() -> MetricsCollector:
 
 
 # Convenience functions
-def record_api_call(service: str, endpoint: str, duration_ms: float, status_code: int, error: Optional[str] = None):
+def record_api_call(service: str, endpoint: str, duration_ms: float, status_code: int, error: str | None = None):
     """Record an API call"""
     get_metrics_collector().record_api_call(service, endpoint, duration_ms, status_code, error)
 
@@ -292,7 +274,7 @@ def set_circuit_state(service: str, state: str):
     get_metrics_collector().set_circuit_state(service, state)
 
 
-def get_metrics() -> Dict[str, Any]:
+def get_metrics() -> dict[str, Any]:
     """Get current metrics"""
     return get_metrics_collector().get_metrics()
 
