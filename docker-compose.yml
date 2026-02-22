@@ -1,0 +1,19 @@
+services:
+  infoblox-ddi-mcp:
+    build: .
+    container_name: infoblox-ddi-mcp
+    ports:
+      - "${MCP_PORT:-4005}:4005"
+    environment:
+      - INFOBLOX_API_KEY=${INFOBLOX_API_KEY}
+      - INFOBLOX_BASE_URL=${INFOBLOX_BASE_URL:-https://csp.infoblox.com}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=4005
+      - MCP_PATH=/mcp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:4005/mcp', method='POST', headers={'Content-Type':'application/json'}, data=b'{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}'))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

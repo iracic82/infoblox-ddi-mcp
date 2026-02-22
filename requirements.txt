@@ -1,0 +1,13 @@
+# MCP Server
+fastmcp>=2.0.0
+
+# Infoblox API Client
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Logging
+structlog>=24.1.0
+
+# Resilience
+cachetools>=5.3.0
+pybreaker>=1.0.0
