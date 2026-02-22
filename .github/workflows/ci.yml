@@ -35,10 +35,11 @@ jobs:
           [ "$count" -eq 20 ] || (echo "Expected 20 tools, found $count" && exit 1)
 
       - name: Verify imports
-        run: python -c "
+        run: |
+          python -c "
           import mcp_intent
-          print(f'Version: {mcp_intent.__version__}')
-          print(f'Server name: {mcp_intent.mcp.name}')
+          print('Version:', mcp_intent.__version__)
+          print('Server name:', mcp_intent.mcp.name)
           "
 
   docker:
@@ -52,7 +53,7 @@ jobs:
       - name: Verify image
         run: |
           docker run --rm infoblox-ddi-mcp:test python -c "
-          import mcp_intent
-          print(f'Version: {mcp_intent.__version__}')
+          import mcp_intent;
+          print('Version:', mcp_intent.__version__);
           print('Module loaded successfully')
           "
