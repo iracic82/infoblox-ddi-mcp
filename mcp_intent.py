@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
