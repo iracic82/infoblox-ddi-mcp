@@ -1,4 +1,4 @@
-[![CI](https://github.com/iracic/infoblox-ddi-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/iracic/infoblox-ddi-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/iracic82/infoblox-ddi-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/iracic82/infoblox-ddi-mcp/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
@@ -17,7 +17,7 @@ Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, D
 ### Option A: uv (recommended)
 
 ```bash
-cd infoblox-mcp
+cd infoblox-ddi-mcp
 
 # Install dependencies
 uv pip install -r requirements.txt
@@ -50,7 +50,7 @@ docker compose up -d
 ### Option C: pip install
 
 ```bash
-cd infoblox-mcp
+cd infoblox-ddi-mcp
 pip install .
 
 # Now available as a CLI command:
@@ -77,6 +77,7 @@ Stdio transport communicates via stdin/stdout JSON-RPC. HTTP transport runs a sp
 | `MCP_PORT` | `4005` | HTTP port |
 | `MCP_PATH` | `/mcp` | HTTP endpoint path |
 | `MCP_AUTH_TOKEN` | (optional) | Bearer token for HTTP transport authentication |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (optional) | OTLP endpoint to enable tracing (requires `[otel]` extra) |
 
 When `MCP_AUTH_TOKEN` is set, all HTTP requests must include `Authorization: Bearer <token>`. Stdio transport is unaffected (authentication is handled by the host process).
 
@@ -93,7 +94,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "infoblox-ddi": {
       "command": "python",
-      "args": ["/absolute/path/to/infoblox-mcp/mcp_intent.py"],
+      "args": ["/absolute/path/to/infoblox-ddi-mcp/mcp_intent.py"],
       "env": {
         "INFOBLOX_API_KEY": "your_api_key_here",
         "INFOBLOX_BASE_URL": "https://csp.infoblox.com"
@@ -145,7 +146,7 @@ client = MultiServerMCPClient(
     {
         "infoblox-ddi-stdio": {
             "command": "python",
-            "args": ["/path/to/infoblox-mcp/mcp_intent.py"],
+            "args": ["/path/to/infoblox-ddi-mcp/mcp_intent.py"],
             "transport": "stdio",
         },
         # Or use HTTP (streamable_http is recommended over sse):
@@ -171,7 +172,7 @@ async with MCPServerStdio(
     name="infoblox-ddi",
     params={
         "command": "python",
-        "args": ["/path/to/infoblox-mcp/mcp_intent.py"],
+        "args": ["/path/to/infoblox-ddi-mcp/mcp_intent.py"],
     },
 ) as server:
     agent = Agent(name="ddi-agent", mcp_servers=[server])
@@ -197,7 +198,7 @@ Add to `.cursor/mcp.json` in your project root:
   "mcpServers": {
     "infoblox-ddi": {
       "command": "python",
-      "args": ["/absolute/path/to/infoblox-mcp/mcp_intent.py"],
+      "args": ["/absolute/path/to/infoblox-ddi-mcp/mcp_intent.py"],
       "env": {
         "INFOBLOX_API_KEY": "your_api_key_here"
       }
@@ -215,7 +216,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
   "mcpServers": {
     "infoblox-ddi": {
       "command": "python",
-      "args": ["/absolute/path/to/infoblox-mcp/mcp_intent.py"],
+      "args": ["/absolute/path/to/infoblox-ddi-mcp/mcp_intent.py"],
       "env": {
         "INFOBLOX_API_KEY": "your_api_key_here"
       }
@@ -435,6 +436,25 @@ The Docker image:
 - Binds to `0.0.0.0:4005` by default
 - Accepts all config via environment variables
 
+## OpenTelemetry (Optional)
+
+Distributed tracing is available as an optional extra:
+
+```bash
+pip install infoblox-ddi-mcp[otel]
+```
+
+Enable by setting `OTEL_EXPORTER_OTLP_ENDPOINT`:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+python mcp_intent.py --http
+```
+
+All MCP tool calls are auto-traced with service name `infoblox-ddi-mcp`. Works with Jaeger, Grafana Tempo, Datadog, or any OTLP-compatible backend. If the packages aren't installed, the server runs normally without tracing.
+
+---
+
 ## Production Deployment
 
 ### Behind an API Gateway (Recommended)
@@ -595,6 +615,9 @@ make install        Install dependencies with uv
 make dev            Install in editable mode
 make run            Run MCP server (stdio)
 make run-http       Run MCP server (HTTP)
+make lint           Run ruff linter
+make format         Run ruff formatter
+make test           Run test suite (101 tests)
 make docker-build   Build Docker image
 make docker-run     Run Docker container
 make docker-up      Start with docker compose
@@ -642,18 +665,35 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
 ## Project Structure
 
 ```
-infoblox-mcp/
+infoblox-ddi-mcp/
 ├── mcp_intent.py              ← MCP server entry point (run this)
 ├── services/
 │   ├── infoblox_client.py     ← Infoblox DDI API client (85 methods)
 │   ├── insights_client.py     ← SOC Insights API client (13 methods)
 │   ├── atcfw_client.py        ← DNS Security API client (11 methods)
 │   └── metrics.py             ← Internal metrics collection
+├── tests/                     ← 101 tests (validators, resolvers, tools, resources)
+│   ├── conftest.py
+│   ├── test_validation.py
+│   ├── test_resolvers.py
+│   ├── test_tools.py
+│   └── test_resources.py
+├── examples/                  ← Integration examples
+│   ├── anthropic_sdk.py
+│   ├── openai_agents.py
+│   ├── langchain_example.py
+│   └── curl_test.sh
+├── .github/workflows/
+│   ├── ci.yml                 ← Lint + test (3.10-3.13) + Docker
+│   └── publish.yml            ← PyPI publishing on v* tags
 ├── pyproject.toml             ← Package metadata (uv/pip install)
 ├── requirements.txt           ← Pinned dependencies
 ├── Dockerfile                 ← Production container image
 ├── docker-compose.yml         ← One-command deployment
 ├── Makefile                   ← Developer shortcuts
+├── .pre-commit-config.yaml    ← Ruff + pre-commit hooks
+├── CHANGELOG.md
+├── SECURITY.md
 ├── .env.example
 └── README.md
 ```
