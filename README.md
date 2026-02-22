@@ -70,6 +70,9 @@ Stdio transport communicates via stdin/stdout JSON-RPC. HTTP transport runs a sp
 | `MCP_HOST` | `0.0.0.0` | HTTP bind address |
 | `MCP_PORT` | `4005` | HTTP port |
 | `MCP_PATH` | `/mcp` | HTTP endpoint path |
+| `MCP_AUTH_TOKEN` | (optional) | Bearer token for HTTP transport authentication |
+
+When `MCP_AUTH_TOKEN` is set, all HTTP requests must include `Authorization: Bearer <token>`. Stdio transport is unaffected (authentication is handled by the host process).
 
 ---
 

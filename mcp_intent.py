@@ -114,6 +114,12 @@ import re
 import ipaddress
 
 
+def sanitize_filter(value: str) -> str:
+    """Escape user input for safe use in BloxOne API filter expressions.
+    Prevents filter injection by escaping double quotes and backslashes."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def validate_action(action: str, allowed: List[str]) -> tuple:
     """Validate action against allowed list. Returns (is_valid, error_msg)."""
     if action not in allowed:
@@ -171,9 +177,9 @@ def resolve_space(space_name: str) -> tuple:
     if space_name.startswith("ipam/ip_space/"):
         return space_name, step_result("Resolve IP space", "success", {"space_id": space_name}), ""
     try:
-        spaces = extract_results(client.list_ip_spaces(filter=f'name=="{space_name}"'))
+        spaces = extract_results(client.list_ip_spaces(filter=f'name=="{sanitize_filter(space_name)}"'))
         if not spaces:
-            spaces = extract_results(client.list_ip_spaces(filter=f'name~"{space_name}"'))
+            spaces = extract_results(client.list_ip_spaces(filter=f'name~"{sanitize_filter(space_name)}"'))
         if spaces:
             space_id = spaces[0].get("id", "")
             return space_id, step_result("Resolve IP space", "success", {"space_id": space_id, "name": spaces[0].get("name")}), ""
@@ -189,7 +195,7 @@ def resolve_zone(zone_fqdn: str) -> tuple:
     if zone_fqdn.startswith("dns/auth_zone/"):
         return zone_fqdn, step_result("Resolve DNS zone", "success", {"zone_id": zone_fqdn}), ""
     try:
-        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_fqdn}"'))
+        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_fqdn)}"'))
         if not zones:
             zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_fqdn}."'))
         if zones:
@@ -207,9 +213,9 @@ def resolve_realm(realm_name: str) -> tuple:
     if realm_name.startswith("federation/"):
         return realm_name, step_result("Resolve federated realm", "success", {"realm_id": realm_name}), ""
     try:
-        realms = extract_results(client.list_federated_realms(filter=f'name=="{realm_name}"'))
+        realms = extract_results(client.list_federated_realms(filter=f'name=="{sanitize_filter(realm_name)}"'))
         if not realms:
-            realms = extract_results(client.list_federated_realms(filter=f'name~"{realm_name}"'))
+            realms = extract_results(client.list_federated_realms(filter=f'name~"{sanitize_filter(realm_name)}"'))
         if realms:
             realm_id = realms[0].get("id", "")
             return realm_id, step_result("Resolve federated realm", "success", {"realm_id": realm_id, "name": realms[0].get("name")}), ""
@@ -251,7 +257,7 @@ def explore_network(
 
     # Step 1: Get IP spaces
     try:
-        space_filter = f'name~"{scope}"' if scope else None
+        space_filter = f'name~"{sanitize_filter(scope)}"' if scope else None
         spaces_resp = client.list_ip_spaces(filter=space_filter)
         spaces = extract_results(spaces_resp)
         steps.append(step_result("List IP spaces", "success", {"count": len(spaces)}))
@@ -382,7 +388,7 @@ def search_infrastructure(
     # Search DNS zones
     if "dns_zones" in search_types:
         try:
-            zone_filter = f'fqdn~"{query}"' if query and query != "*" else None
+            zone_filter = f'fqdn~"{sanitize_filter(query)}"' if query and query != "*" else None
             resp = client.list_auth_zones(filter=zone_filter, limit=limit)
             items = extract_results(resp)
             results["dns_zones"] = [
@@ -398,7 +404,7 @@ def search_infrastructure(
     # Search subnets
     if "subnets" in search_types:
         try:
-            resp = client.list_subnets(filter=f'address~"{query}" or comment~"{query}"', limit=limit)
+            resp = client.list_subnets(filter=f'address~"{sanitize_filter(query)}" or comment~"{sanitize_filter(query)}"', limit=limit)
             items = extract_results(resp)
             results["subnets"] = [
                 {"id": s.get("id"), "address": s.get("address"), "cidr": s.get("cidr"),
@@ -413,7 +419,7 @@ def search_infrastructure(
     # Search DNS records
     if "dns_records" in search_types:
         try:
-            resp = client.list_dns_records(filter=f'name_in_zone~"{query}" or absolute_name_spec~"{query}"', limit=limit)
+            resp = client.list_dns_records(filter=f'name_in_zone~"{sanitize_filter(query)}" or absolute_name_spec~"{sanitize_filter(query)}"', limit=limit)
             items = extract_results(resp)
             results["dns_records"] = [
                 {"id": r.get("id"), "name": r.get("absolute_name_spec", r.get("name_in_zone")),
@@ -428,7 +434,7 @@ def search_infrastructure(
     # Search IPAM hosts
     if "hosts" in search_types:
         try:
-            resp = client.list_ipam_hosts(filter=f'name~"{query}"', limit=limit)
+            resp = client.list_ipam_hosts(filter=f'name~"{sanitize_filter(query)}"', limit=limit)
             items = extract_results(resp)
             results["hosts"] = [
                 {"id": h.get("id"), "name": h.get("name"),
@@ -443,7 +449,7 @@ def search_infrastructure(
     # Search IP addresses
     if "addresses" in search_types:
         try:
-            resp = client.list_addresses(filter=f'address~"{query}"', limit=limit)
+            resp = client.list_addresses(filter=f'address~"{sanitize_filter(query)}"', limit=limit)
             items = extract_results(resp)
             results["addresses"] = [
                 {"id": a.get("id"), "address": a.get("address"),
@@ -496,7 +502,7 @@ def get_network_summary(scope: Optional[str] = None) -> dict:
 
     # IP Spaces
     try:
-        space_filter = f'name~"{scope}"' if scope else None
+        space_filter = f'name~"{sanitize_filter(scope)}"' if scope else None
         spaces = extract_results(client.list_ip_spaces(filter=space_filter))
         summary_data["ip_spaces"] = {"count": len(spaces), "names": [s.get("name", "") for s in spaces]}
         steps.append(step_result("Count IP spaces", "success", {"count": len(spaces)}))
@@ -598,9 +604,9 @@ def provision_host(
     space_id = space
     if not space.startswith("ipam/ip_space/"):
         try:
-            spaces = extract_results(client.list_ip_spaces(filter=f'name=="{space}"'))
+            spaces = extract_results(client.list_ip_spaces(filter=f'name=="{sanitize_filter(space)}"'))
             if not spaces:
-                spaces = extract_results(client.list_ip_spaces(filter=f'name~"{space}"'))
+                spaces = extract_results(client.list_ip_spaces(filter=f'name~"{sanitize_filter(space)}"'))
             if spaces:
                 space_id = spaces[0].get("id", space)
                 steps.append(step_result("Resolve IP space", "success", {"space_id": space_id, "name": spaces[0].get("name")}))
@@ -645,7 +651,7 @@ def provision_host(
     if zone:
         try:
             # Find the zone ID
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone}"'))
+            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone)}"'))
             if zones:
                 zone_id = zones[0].get("id", "")
                 a_resp = client.create_dns_record(
@@ -678,7 +684,7 @@ def provision_host(
             reverse_name = ip_parts[3]  # Last octet
             reverse_zone_fqdn = f"{ip_parts[2]}.{ip_parts[1]}.{ip_parts[0]}.in-addr.arpa."
 
-            rev_zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{reverse_zone_fqdn}"'))
+            rev_zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(reverse_zone_fqdn)}"'))
             if rev_zones:
                 rev_zone_id = rev_zones[0].get("id", "")
                 ptr_resp = client.create_dns_record(
@@ -773,7 +779,7 @@ def provision_dns(
 
     # Step 1: Find the zone
     try:
-        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone}"'))
+        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone)}"'))
         if not zones:
             # Try with trailing dot
             zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone}."'))
@@ -874,10 +880,10 @@ def decommission_host(
 
     # Step 1: Find IPAM hosts matching the identifier
     try:
-        hosts = extract_results(client.list_ipam_hosts(filter=f'name~"{identifier}"'))
+        hosts = extract_results(client.list_ipam_hosts(filter=f'name~"{sanitize_filter(identifier)}"'))
         if not hosts:
             # Try searching by IP in addresses
-            addresses = extract_results(client.list_addresses(filter=f'address=="{identifier}"'))
+            addresses = extract_results(client.list_addresses(filter=f'address=="{sanitize_filter(identifier)}"'))
             if addresses:
                 # Find host associated with this IP
                 for addr in addresses:
@@ -885,7 +891,7 @@ def decommission_host(
                     for name_info in names:
                         host_name = name_info.get("name", "")
                         if host_name:
-                            hosts = extract_results(client.list_ipam_hosts(filter=f'name=="{host_name}"'))
+                            hosts = extract_results(client.list_ipam_hosts(filter=f'name=="{sanitize_filter(host_name)}"'))
                             break
 
         if not hosts:
@@ -908,7 +914,7 @@ def decommission_host(
 
             # Search for DNS records matching this host
             try:
-                dns_records = extract_results(client.list_dns_records(filter=f'absolute_name_spec~"{host_name}"'))
+                dns_records = extract_results(client.list_dns_records(filter=f'absolute_name_spec~"{sanitize_filter(host_name)}"'))
                 for record in dns_records:
                     resources_to_delete.append({
                         "type": f"dns_{record.get('type', 'unknown')}_record",
@@ -994,13 +1000,13 @@ def diagnose_dns(domain: str) -> dict:
     zone_found = False
     zone_id = None
     try:
-        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_part}"'))
+        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_part)}"'))
         if not zones:
             zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_part}."'))
         if not zones and "." in zone_part:
             # Try parent zone
             parent = zone_part.split(".", 1)[1]
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{parent}"'))
+            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(parent)}"'))
             if zones:
                 name_part = domain.replace(f".{parent}", "")
                 zone_part = parent
@@ -1020,11 +1026,11 @@ def diagnose_dns(domain: str) -> dict:
     # Step 2: Check DNS records for this domain
     try:
         records = extract_results(client.list_dns_records(
-            filter=f'absolute_name_spec=="{domain}" or absolute_name_spec=="{domain}."'
+            filter=f'absolute_name_spec=="{sanitize_filter(domain)}" or absolute_name_spec=="{domain}."'
         ))
         if not records and name_part:
             records = extract_results(client.list_dns_records(
-                filter=f'name_in_zone=="{name_part}"'
+                filter=f'name_in_zone=="{sanitize_filter(name_part)}"'
             ))
 
         diagnostics["records"] = [
@@ -1104,7 +1110,7 @@ def diagnose_ip_conflict(address: str) -> dict:
 
     # Step 1: Check subnets containing this IP
     try:
-        subnets = extract_results(client.list_subnets(filter=f'address~"{".".join(address.split(".")[:3])}"'))
+        subnets = extract_results(client.list_subnets(filter=f'address~"{sanitize_filter(".".join(address.split(".")[:3]))}"'))
         matching_subnets = []
         for s in subnets:
             subnet_addr = s.get("address", "")
@@ -1123,7 +1129,7 @@ def diagnose_ip_conflict(address: str) -> dict:
 
     # Step 2: Check IP address records
     try:
-        addresses = extract_results(client.list_addresses(filter=f'address=="{address}"'))
+        addresses = extract_results(client.list_addresses(filter=f'address=="{sanitize_filter(address)}"'))
         diagnostics["address_records"] = [
             {"id": a.get("id"), "address": a.get("address"),
              "usage": a.get("usage", []), "names": a.get("names", [])}
@@ -1138,7 +1144,7 @@ def diagnose_ip_conflict(address: str) -> dict:
 
     # Step 3: Check IP ranges
     try:
-        ranges = extract_results(client.list_ranges(filter=f'start<="{address}" and end>="{address}"'))
+        ranges = extract_results(client.list_ranges(filter=f'start<="{sanitize_filter(address)}" and end>="{sanitize_filter(address)}"'))
         diagnostics["ranges"] = [
             {"id": r.get("id"), "start": r.get("start"), "end": r.get("end"), "comment": r.get("comment", "")}
             for r in ranges
@@ -1459,7 +1465,7 @@ def get_ip_utilization(scope: Optional[str] = None) -> dict:
     utilization = {"spaces": [], "high_utilization": []}
 
     try:
-        space_filter = f'name~"{scope}"' if scope else None
+        space_filter = f'name~"{sanitize_filter(scope)}"' if scope else None
         spaces = extract_results(client.list_ip_spaces(filter=space_filter))
 
         for space in spaces:
@@ -1827,7 +1833,7 @@ def manage_dns_zone(
                 return intent_response("failed", err)
 
             # Check if zone already exists
-            existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{fqdn}"'))
+            existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(fqdn)}"'))
             if not existing:
                 existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{fqdn}."'))
             if existing:
@@ -1962,9 +1968,9 @@ def manage_dns_record(
 
         filters = []
         if "." in name and not zone:
-            filters.append(f'absolute_name_spec=="{name}"')
+            filters.append(f'absolute_name_spec=="{sanitize_filter(name)}"')
         elif zone:
-            filters.append(f'name_in_zone=="{name}"')
+            filters.append(f'name_in_zone=="{sanitize_filter(name)}"')
             zone_id, s, err = resolve_zone(zone)
             if s:
                 steps.append(s)
@@ -1974,7 +1980,7 @@ def manage_dns_record(
         if record_type:
             filters.append(f'type=="{record_type.upper()}"')
 
-        filter_str = " and ".join(filters) if filters else f'name_in_zone~"{name}"'
+        filter_str = " and ".join(filters) if filters else f'name_in_zone~"{sanitize_filter(name)}"'
         records = extract_results(client.list_dns_records(filter=filter_str, limit=5))
         if records:
             rid = records[0].get("id", "")
@@ -1996,7 +2002,7 @@ def manage_dns_record(
             if record_type:
                 filters.append(f'type=="{record_type.upper()}"')
             if name:
-                filters.append(f'name_in_zone~"{name}"')
+                filters.append(f'name_in_zone~"{sanitize_filter(name)}"')
 
             filter_str = " and ".join(filters) if filters else None
             resp = client.list_dns_records(filter=filter_str, limit=limit)
@@ -2334,7 +2340,7 @@ def manage_ip_reservation(
                 return intent_response("failed", f"Cannot resolve IP space: {err}", steps)
 
             # Check if IP is already in use
-            existing = extract_results(client.list_addresses(filter=f'address=="{address}"'))
+            existing = extract_results(client.list_addresses(filter=f'address=="{sanitize_filter(address)}"'))
             if existing:
                 usage = existing[0].get("usage", [])
                 if usage:
@@ -2366,7 +2372,7 @@ def manage_ip_reservation(
                 if space_id:
                     filters.append(f'ip_space=="{space_id}"')
             if address:
-                filters.append(f'address~"{address}"')
+                filters.append(f'address~"{sanitize_filter(address)}"')
 
             filter_str = " and ".join(filters) if filters else None
             resp = client.list_addresses(filter=filter_str, limit=100)
@@ -2383,7 +2389,7 @@ def manage_ip_reservation(
             if not resource_id:
                 if address:
                     # Lookup by address
-                    resp = client.list_addresses(filter=f'address=="{address}"')
+                    resp = client.list_addresses(filter=f'address=="{sanitize_filter(address)}"')
                     items = extract_results(resp)
                     if items:
                         resource_id = items[0].get("id")
@@ -2423,7 +2429,7 @@ def manage_ip_reservation(
                 valid_ip, ip_err = validate_ip(address)
                 if not valid_ip:
                     return intent_response("failed", ip_err)
-                addr_records = extract_results(client.list_addresses(filter=f'address=="{address}"'))
+                addr_records = extract_results(client.list_addresses(filter=f'address=="{sanitize_filter(address)}"'))
                 if not addr_records:
                     return intent_response("failed", f"No address record found for '{address}'", steps)
                 resource_id = addr_records[0].get("id")
@@ -2432,7 +2438,7 @@ def manage_ip_reservation(
             # Check for host associations
             if address:
                 try:
-                    hosts = extract_results(client.list_ipam_hosts(filter=f'address=="{address}"'))
+                    hosts = extract_results(client.list_ipam_hosts(filter=f'address=="{sanitize_filter(address)}"'))
                     if hosts:
                         warnings.append(f"IP {address} is associated with host(s): {[h.get('name') for h in hosts]}")
                 except Exception:
@@ -3020,10 +3026,143 @@ def triage_security_insight(
         return intent_response("failed", f"Failed to {action} security insight: {e}", steps)
 
 
+# ==================== MCP Resources ====================
+
+@mcp.resource("infoblox://tools")
+def resource_tool_catalog() -> str:
+    """Catalog of all 20 intent tools with descriptions, grouped by domain."""
+    return json.dumps({
+        "version": __version__,
+        "tool_count": 20,
+        "domains": {
+            "discovery": {
+                "tools": ["explore_network", "search_infrastructure", "get_network_summary"],
+                "description": "Read-only exploration and search across the DDI infrastructure"
+            },
+            "provisioning": {
+                "tools": ["provision_host", "provision_dns", "decommission_host"],
+                "description": "Create and remove hosts with automatic DNS and IP management"
+            },
+            "troubleshooting": {
+                "tools": ["diagnose_dns", "diagnose_ip_conflict", "check_infrastructure_health"],
+                "description": "Diagnose DNS, IP, and infrastructure issues"
+            },
+            "security": {
+                "tools": ["investigate_threat", "assess_security_posture", "manage_security_policy", "triage_security_insight"],
+                "description": "Threat investigation, posture assessment, policy management, and triage"
+            },
+            "ipam": {
+                "tools": ["manage_network", "manage_ip_reservation", "get_ip_utilization"],
+                "description": "CRUD for subnets, address blocks, ranges, and IP reservations"
+            },
+            "dns": {
+                "tools": ["manage_dns_zone", "manage_dns_record"],
+                "description": "CRUD for DNS zones and records"
+            },
+            "dhcp": {
+                "tools": ["manage_dhcp"],
+                "description": "CRUD for HA groups, option codes, filters, and hardware"
+            },
+            "federation": {
+                "tools": ["manage_federation"],
+                "description": "CRUD for federated realms, blocks, delegations, and pools"
+            }
+        }
+    }, indent=2)
+
+
+@mcp.resource("infoblox://status")
+def resource_connection_status() -> str:
+    """Current connection status for all Infoblox service clients."""
+    return json.dumps({
+        "infoblox_client": "connected" if client else "not_initialized",
+        "insights_client": "connected" if insights_client else "not_initialized",
+        "atcfw_client": "connected" if atcfw_client else "not_initialized",
+        "base_url": os.environ.get("INFOBLOX_BASE_URL", "https://csp.infoblox.com"),
+        "api_key_set": bool(os.environ.get("INFOBLOX_API_KEY")),
+    }, indent=2)
+
+
+@mcp.resource("infoblox://dns/record-types")
+def resource_dns_record_types() -> str:
+    """Reference: supported DNS record types and their rdata formats."""
+    return json.dumps({
+        "A":     {"rdata": {"address": "10.0.0.1"}, "description": "IPv4 address"},
+        "AAAA":  {"rdata": {"address": "2001:db8::1"}, "description": "IPv6 address"},
+        "CNAME": {"rdata": {"dname": "target.example.com"}, "description": "Canonical name alias"},
+        "MX":    {"rdata": {"preference": 10, "exchange": "mail.example.com"}, "description": "Mail exchange"},
+        "TXT":   {"rdata": {"text": "v=spf1 include:example.com ~all"}, "description": "Text record"},
+        "PTR":   {"rdata": {"dname": "host.example.com"}, "description": "Reverse DNS pointer"},
+        "SRV":   {"rdata": {"priority": 10, "weight": 60, "port": 5060, "target": "sip.example.com"}, "description": "Service locator"},
+        "NS":    {"rdata": {"dname": "ns1.example.com"}, "description": "Nameserver delegation"},
+        "CAA":   {"rdata": {"flags": 0, "tag": "issue", "value": "letsencrypt.org"}, "description": "Certificate authority authorization"},
+    }, indent=2)
+
+
+# ==================== MCP Prompts ====================
+
+@mcp.prompt()
+def provision_complete_host() -> str:
+    """Guided workflow: provision a host with IP and DNS records step by step."""
+    return """You are helping the user provision a new host in Infoblox DDI.
+
+Follow these steps:
+1. Ask for: hostname, IP space (or use explore_network() to show available spaces)
+2. Ask if they want a specific IP or auto-assignment
+3. Ask if they want DNS records (need a zone name)
+4. Call provision_host() with the collected parameters
+5. Show the result and suggest verification with search_infrastructure()
+
+Always confirm before executing. If the zone doesn't exist, suggest manage_dns_zone(action="create") first."""
+
+
+@mcp.prompt()
+def diagnose_dns_issues() -> str:
+    """Guided workflow: troubleshoot DNS resolution problems."""
+    return """You are helping the user troubleshoot DNS issues.
+
+Follow these steps:
+1. Ask for the domain name that isn't resolving
+2. Call diagnose_dns(domain="...") to check zone, records, and security
+3. If zone is missing: suggest manage_dns_zone(action="create")
+4. If records are missing: suggest provision_dns() to create them
+5. If security is blocking: suggest manage_security_policy() to review named lists
+6. Summarize all findings and recommended fixes"""
+
+
+@mcp.prompt()
+def security_incident_triage() -> str:
+    """Guided workflow: investigate and triage a security incident."""
+    return """You are helping the user investigate and triage a security incident.
+
+Follow these steps:
+1. Call investigate_threat() to get current open insights
+2. For critical/high priority insights, call triage_security_insight(action="get_history") for context
+3. Present findings: threat type, indicators, affected assets
+4. Ask the user what status to set (IN_PROGRESS, RESOLVED, CLOSED, FALSE_POSITIVE)
+5. For bulk operations, use triage_security_insight(action="bulk_triage", dry_run=True) first
+6. Always dry_run before executing bulk changes"""
+
+
+@mcp.prompt()
+def capacity_planning() -> str:
+    """Guided workflow: assess IP space capacity and plan expansions."""
+    return """You are helping the user with IP address capacity planning.
+
+Follow these steps:
+1. Call get_ip_utilization() to see current usage across all spaces
+2. Highlight any subnets above 80% utilization
+3. For high-utilization spaces, call explore_network(scope="...", depth="full") for detail
+4. Suggest manage_network(resource_type="subnet", action="create") for new subnets
+5. If federation is in use, suggest manage_federation() for block allocation"""
+
+
 # ==================== Server Entry Point ====================
 
 def main():
     """Entry point for both `python mcp_intent.py` and the `infoblox-ddi-mcp` CLI."""
+    global mcp
+
     host = os.environ.get("MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_PORT", "4005"))
     path = os.environ.get("MCP_PATH", "/mcp")
@@ -3032,12 +3171,28 @@ def main():
     #   python mcp_intent.py          → stdio (for Claude Desktop, Cursor, etc.)
     #   python mcp_intent.py --http   → HTTP (for AEX, remote clients)
     if "--http" in sys.argv:
+        # Optional bearer token auth via FastMCP's native auth support
+        auth_token = os.environ.get("MCP_AUTH_TOKEN")
+        auth_status = "enabled" if auth_token else "disabled (set MCP_AUTH_TOKEN to enable)"
+
+        if auth_token:
+            from fastmcp.server.auth import StaticTokenVerifier, RemoteAuthProvider
+            verifier = StaticTokenVerifier(tokens={auth_token: {"sub": "mcp-client"}})
+            auth_provider = RemoteAuthProvider(
+                token_verifier=verifier,
+                authorization_servers=["https://localhost"],
+                base_url=f"http://{host}:{port}",
+            )
+            mcp.auth = auth_provider
+            logger.info("Bearer token authentication enabled for HTTP transport")
+
         print("=" * 60, file=sys.stderr)
         print(f"  Infoblox DDI Intent Layer v{__version__} — MCP Server (HTTP)", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         print(f"  Endpoint:  http://{host}:{port}{path}", file=sys.stderr)
         print(f"  Transport: HTTP streamable (spec-compliant)", file=sys.stderr)
         print(f"  Tools:     20 intent-level workflow tools", file=sys.stderr)
+        print(f"  Auth:      Bearer token {auth_status}", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 
         mcp.run(
