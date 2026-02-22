@@ -414,6 +414,159 @@ The Docker image:
 - Binds to `0.0.0.0:4005` by default
 - Accepts all config via environment variables
 
+## Production Deployment
+
+### Behind an API Gateway (Recommended)
+
+For production environments, run the MCP server behind an API gateway for TLS termination, rate limiting, and centralized authentication.
+
+```
+                        ┌─────────────────────┐
+  AI Agents             │   API Gateway        │        MCP Server
+  (Claude, AEX,  ──────▶│   (Kong / AWS API    │──────▶  infoblox-ddi-mcp
+   LangChain)    HTTPS  │    GW / Nginx / F5)  │ HTTP    :4005/mcp
+                        │                     │
+                        │  • TLS termination   │
+                        │  • Rate limiting     │
+                        │  • Auth (OAuth/JWT)  │
+                        │  • Access logging    │
+                        └─────────────────────┘
+```
+
+The MCP server runs plain HTTP internally. The gateway handles TLS and external auth. Set `MCP_AUTH_TOKEN` as a shared secret between the gateway and the server for an additional layer of security.
+
+#### Kubernetes / Docker Compose
+
+```yaml
+# docker-compose.prod.yml
+services:
+  infoblox-mcp:
+    image: infoblox-ddi-mcp:latest
+    restart: always
+    environment:
+      - INFOBLOX_API_KEY=${INFOBLOX_API_KEY}
+      - INFOBLOX_BASE_URL=${INFOBLOX_BASE_URL:-https://csp.infoblox.com}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=4005
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+    ports:
+      - "127.0.0.1:4005:4005"   # bind to localhost only — gateway handles external traffic
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4005/mcp')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+```
+
+#### Nginx Reverse Proxy Example
+
+```nginx
+upstream mcp_backend {
+    server 127.0.0.1:4005;
+}
+
+server {
+    listen 443 ssl;
+    server_name mcp.example.com;
+
+    ssl_certificate     /etc/ssl/certs/mcp.crt;
+    ssl_certificate_key /etc/ssl/private/mcp.key;
+
+    location /mcp {
+        proxy_pass http://mcp_backend/mcp;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Authorization "Bearer ${MCP_AUTH_TOKEN}";
+
+        # Rate limiting
+        limit_req zone=mcp burst=20 nodelay;
+    }
+}
+```
+
+#### AWS API Gateway
+
+1. Create an HTTP API in API Gateway
+2. Add a route: `POST /mcp` → integration to your ECS/EKS service on port 4005
+3. Attach a Lambda authorizer or Cognito user pool for auth
+4. Enable CloudWatch logging for audit trail
+
+#### Kubernetes Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infoblox-mcp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: infoblox-mcp
+  template:
+    metadata:
+      labels:
+        app: infoblox-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: infoblox-ddi-mcp:latest
+          ports:
+            - containerPort: 4005
+          env:
+            - name: INFOBLOX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: infoblox-secrets
+                  key: api-key
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: infoblox-secrets
+                  key: mcp-token
+          livenessProbe:
+            httpGet:
+              path: /mcp
+              port: 4005
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: infoblox-mcp
+spec:
+  selector:
+    app: infoblox-mcp
+  ports:
+    - port: 4005
+      targetPort: 4005
+```
+
+### Deployment Checklist
+
+| Step | Action |
+|------|--------|
+| 1 | Set `INFOBLOX_API_KEY` via secrets manager (never in plain text) |
+| 2 | Set `MCP_AUTH_TOKEN` for server-to-gateway authentication |
+| 3 | Bind to `127.0.0.1` or internal network only (gateway handles external) |
+| 4 | Enable TLS on the gateway (never expose plain HTTP externally) |
+| 5 | Configure rate limiting (recommended: 60 req/min per client) |
+| 6 | Enable access logging on the gateway for audit |
+| 7 | Set resource limits (512MB RAM, 0.5 CPU is sufficient) |
+| 8 | Monitor health check endpoint |
+
+---
+
 ## Makefile Targets
 
 ```
