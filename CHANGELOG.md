@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-02-22
+
+### Fixed
+
+- `provision_dns` now returns `success` with `already_existed: true` on HTTP 409 (record already exists) instead of failing
+- README badge URL corrected to `iracic82` org
+- README example paths updated from `infoblox-mcp/` to `infoblox-ddi-mcp/`
+
+### Added
+
+- OpenTelemetry section in README with setup instructions
+- Updated project structure in README to include tests, examples, and CI workflows
+
 ## [1.1.0] - 2025-02-22
 
 ### Added
