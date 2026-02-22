@@ -7,7 +7,27 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv venv --python 3.12
+
+      - name: Install ruff
+        run: uv pip install ruff
+
+      - name: Ruff check
+        run: uv run ruff check mcp_intent.py services/
+
+      - name: Ruff format check
+        run: uv run ruff format --check mcp_intent.py services/
+
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,6 +43,7 @@ jobs:
         run: |
           uv venv --python ${{ matrix.python-version }}
           uv pip install -r requirements.txt
+          uv pip install pytest pytest-asyncio
 
       - name: Syntax check
         run: uv run python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('OK')"
@@ -40,6 +61,11 @@ jobs:
           print('Version:', mcp_intent.__version__);
           print('Server name:', mcp_intent.mcp.name)
           "
+
+      - name: Run tests
+        env:
+          INFOBLOX_API_KEY: test_key_for_ci
+        run: uv run python -m pytest tests/ -v
 
   docker:
     runs-on: ubuntu-latest

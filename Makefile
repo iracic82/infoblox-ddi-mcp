@@ -1,4 +1,4 @@
-.PHONY: install dev run run-http docker-build docker-run docker-up docker-down clean lint check
+.PHONY: install dev run run-http docker-build docker-run docker-up docker-down clean lint format test check
 
 # ─── Development ────────────────────────────────────────────────────
 
@@ -33,11 +33,20 @@ docker-down:  ## Stop docker compose
 
 # ─── Quality ────────────────────────────────────────────────────────
 
+lint:  ## Run ruff linter
+	ruff check mcp_intent.py services/
+
+format:  ## Run ruff formatter
+	ruff format mcp_intent.py services/
+
+test:  ## Run test suite
+	INFOBLOX_API_KEY=test_key_for_ci python -m pytest tests/ -v
+
 check:  ## Verify syntax
 	python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('Syntax OK')"
 
 clean:  ## Remove build artifacts
-	rm -rf __pycache__ services/__pycache__ *.pyc *.egg-info dist build
+	rm -rf __pycache__ services/__pycache__ tests/__pycache__ .pytest_cache .ruff_cache *.pyc *.egg-info dist build
 
 # ─── Help ───────────────────────────────────────────────────────────
 

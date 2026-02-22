@@ -1,6 +1,6 @@
 [project]
 name = "infoblox-ddi-mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "Infoblox DDI MCP Server — 20 intent-level workflow tools for agentic AI integration"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -41,4 +41,27 @@ packages = ["services"]
 include = ["mcp_intent.py", "services/"]
 
 [dependency-groups]
-dev = []
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "pre-commit>=4.0"]
+
+[project.optional-dependencies]
+otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20", "opentelemetry-exporter-otlp>=1.20"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "S"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"mcp_intent.py" = ["E402", "S104", "S110"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
