@@ -106,65 +106,80 @@ import anthropic
 
 client = anthropic.Anthropic()
 
-response = client.messages.create(
-    model="claude-sonnet-4-20250514",
+response = client.beta.messages.create(
+    model="claude-sonnet-4-6",
     max_tokens=1024,
     mcp_servers=[
         {
             "type": "url",
-            "url": "http://127.0.0.1:4005/mcp",
+            "url": "https://your-gateway.example.com/mcp",  # must be HTTPS
             "name": "infoblox-ddi",
+            "authorization_token": "your_mcp_auth_token",   # optional, if MCP_AUTH_TOKEN is set
+        }
+    ],
+    tools=[
+        {
+            "type": "mcp_toolset",
+            "mcp_server_name": "infoblox-ddi",
         }
     ],
     messages=[{"role": "user", "content": "Show me all IP spaces and their utilization"}],
-    extra_headers={"anthropic-beta": "mcp-client-2025-04-04"},
+    betas=["mcp-client-2025-11-20"],
 )
 ```
+
+> **Note:** The Anthropic MCP connector requires the server to be reachable via HTTPS. For local testing, use Claude Desktop (stdio) instead.
 
 ### LangChain / LangGraph
 
 ```python
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-async with MultiServerMCPClient(
+client = MultiServerMCPClient(
     {
         "infoblox-ddi-stdio": {
             "command": "python",
             "args": ["/path/to/infoblox-mcp/mcp_intent.py"],
             "transport": "stdio",
         },
-        # Or use HTTP:
+        # Or use HTTP (streamable_http is recommended over sse):
         # "infoblox-ddi-http": {
         #     "url": "http://127.0.0.1:4005/mcp",
         #     "transport": "streamable_http",
         # },
     }
-) as mcp_client:
-    tools = mcp_client.get_tools()
-    # Use with any LangChain agent or LangGraph workflow
+)
+
+tools = await client.get_tools()
+# Use with any LangChain agent or LangGraph workflow
 ```
 
 ### OpenAI Agents SDK
 
 ```python
-from agents import Agent
-from agents.mcp import MCPServerStdio, MCPServerSse
+from agents import Agent, Runner
+from agents.mcp import MCPServerStdio, MCPServerStreamableHttp
 
 # Option A: stdio transport
 async with MCPServerStdio(
+    name="infoblox-ddi",
     params={
         "command": "python",
         "args": ["/path/to/infoblox-mcp/mcp_intent.py"],
-    }
+    },
 ) as server:
     agent = Agent(name="ddi-agent", mcp_servers=[server])
-    # agent.run(...)
+    result = await Runner.run(agent, "Show me all IP spaces")
+    print(result.final_output)
 
-# Option B: HTTP transport (start server first with --http)
-async with MCPServerSse(
-    params={"url": "http://127.0.0.1:4005/mcp"}
+# Option B: HTTP streamable transport (start server first with --http)
+async with MCPServerStreamableHttp(
+    name="infoblox-ddi",
+    params={"url": "http://127.0.0.1:4005/mcp"},
 ) as server:
     agent = Agent(name="ddi-agent", mcp_servers=[server])
+    result = await Runner.run(agent, "List all DNS zones")
+    print(result.final_output)
 ```
 
 ### Cursor IDE
