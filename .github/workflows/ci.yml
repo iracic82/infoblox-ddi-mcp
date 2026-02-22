@@ -50,7 +50,7 @@ jobs:
 
       - name: Verify 20 tools registered
         run: |
-          count=$(grep -c '@mcp.tool()' mcp_intent.py)
+          count=$(grep -c '@mcp.tool(' mcp_intent.py)
           echo "Found $count tools"
           [ "$count" -eq 20 ] || (echo "Expected 20 tools, found $count" && exit 1)
 
