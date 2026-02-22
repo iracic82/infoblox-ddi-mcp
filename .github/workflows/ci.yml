@@ -19,14 +19,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Set up Python
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv pip install --system -r requirements.txt
+      - name: Set up Python and install dependencies
+        run: |
+          uv venv --python ${{ matrix.python-version }}
+          uv pip install -r requirements.txt
 
       - name: Syntax check
-        run: python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('OK')"
+        run: uv run python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('OK')"
 
       - name: Verify 20 tools registered
         run: |
@@ -36,9 +35,9 @@ jobs:
 
       - name: Verify imports
         run: |
-          python -c "
-          import mcp_intent
-          print('Version:', mcp_intent.__version__)
+          uv run python -c "
+          import mcp_intent;
+          print('Version:', mcp_intent.__version__);
           print('Server name:', mcp_intent.mcp.name)
           "
 
