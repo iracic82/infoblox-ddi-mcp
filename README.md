@@ -274,36 +274,36 @@ curl -X POST http://127.0.0.1:4005/mcp \
 
 ## Available Tools
 
-### Discovery & Exploration (Read)
+### Discovery & Exploration (Read-only)
 
 | Tool | Description |
 |------|-------------|
-| `explore_network` | Navigate the IP hierarchy: Spaces → Blocks → Subnets with utilization |
-| `search_infrastructure` | Unified search across subnets, DNS records, hosts, and IP addresses |
-| `get_network_summary` | Executive dashboard — counts, utilization, and health across all DDI |
+| `explore_network` | Browse the IP hierarchy tree (Spaces → Blocks → Subnets) with utilization. Use for navigating network structure |
+| `search_infrastructure` | Find resources by keyword across all DDI domains (IP, hostname, domain, comment) |
+| `get_network_summary` | Executive dashboard with counts and health across all DDI infrastructure |
 
 ### Provisioning (Write)
 
 | Tool | Description |
 |------|-------------|
 | `provision_host` | Create host + IP + A record + PTR in one call (replaces 3 API calls) |
-| `provision_dns` | Create DNS records with automatic zone discovery |
+| `provision_dns` | Create a new DNS record with automatic zone discovery and validation |
 | `decommission_host` | Reverse provisioning with dry-run safety — removes host, DNS, and IP |
 
-### Troubleshooting (Read)
+### Troubleshooting (Read-only)
 
 | Tool | Description |
 |------|-------------|
-| `diagnose_dns` | Check zone existence, records, and security policies for a domain |
-| `diagnose_ip_conflict` | Detect overlapping subnets, duplicate reservations, usage conflicts |
-| `check_infrastructure_health` | HA groups, DHCP hosts, DNS zones, and service health |
+| `diagnose_dns` | Diagnose DNS resolution problems: zone, records, and security policies |
+| `diagnose_ip_conflict` | Detect overlapping subnets, duplicate reservations, DHCP usage, and host associations |
+| `check_infrastructure_health` | HA groups, DHCP hosts, DNS zones, DNS views, IP spaces, and service health |
 
 ### Security (Read + Write)
 
 | Tool | Description |
 |------|-------------|
-| `investigate_threat` | SOC insights with threat indicators and affected assets |
-| `assess_security_posture` | Security policies, compliance, and analytics scorecard |
+| `investigate_threat` | SOC insights with threat indicators, affected assets, and timeline events |
+| `assess_security_posture` | Security policies, category filters, compliance, and analytics scorecard |
 | `manage_security_policy` | CRUD for named lists, app filters, internal domains, access codes |
 | `triage_security_insight` | Update status, bulk triage by priority, get comment history |
 
@@ -311,15 +311,15 @@ curl -X POST http://127.0.0.1:4005/mcp \
 
 | Tool | Description |
 |------|-------------|
-| `manage_network` | CRUD for IP spaces, address blocks, subnets, and IP ranges |
+| `manage_network` | Create, update, delete, get, or list IP spaces, address blocks, subnets, and ranges |
 | `manage_ip_reservation` | Reserve/release fixed IPs and DHCP static leases |
 
 ### DNS Configuration (CRUD)
 
 | Tool | Description |
 |------|-------------|
-| `manage_dns_zone` | CRUD for auth zones, forward zones; list DNS views |
-| `manage_dns_record` | Update, delete, list, get DNS records (smart lookup by name+zone+type) |
+| `manage_dns_zone` | Create, delete, list, or get authoritative and forward zones |
+| `manage_dns_record` | Update, delete, list, or get DNS records (smart lookup by name+zone+type) |
 
 ### DHCP Configuration (CRUD)
 
@@ -333,7 +333,7 @@ curl -X POST http://127.0.0.1:4005/mcp \
 |------|-------------|
 | `manage_federation` | Manage realms, blocks, delegations, pools, overlapping/reserved blocks |
 
-### Reporting
+### Reporting (Read-only)
 
 | Tool | Description |
 |------|-------------|
@@ -617,7 +617,7 @@ make run            Run MCP server (stdio)
 make run-http       Run MCP server (HTTP)
 make lint           Run ruff linter
 make format         Run ruff formatter
-make test           Run test suite (101 tests)
+make test           Run test suite (108 tests)
 make docker-build   Build Docker image
 make docker-run     Run Docker container
 make docker-up      Start with docker compose
@@ -672,7 +672,7 @@ infoblox-ddi-mcp/
 │   ├── insights_client.py     ← SOC Insights API client (13 methods)
 │   ├── atcfw_client.py        ← DNS Security API client (11 methods)
 │   └── metrics.py             ← Internal metrics collection
-├── tests/                     ← 101 tests (validators, resolvers, tools, resources)
+├── tests/                     ← 108 tests (validators, resolvers, tools, resources)
 │   ├── conftest.py
 │   ├── test_validation.py
 │   ├── test_resolvers.py

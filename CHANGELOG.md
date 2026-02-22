@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-22
+
+### Added
+
+- `Literal` types on all enum-like tool parameters — LLMs now see JSON Schema `enum` constraints instead of guessing from docstrings
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 20 tools per MCP spec
+- `manage_network` now supports `"list"` action for listing subnets, address blocks, ranges, and IP spaces
+- `diagnose_ip_conflict` enriched with DHCP usage status and IPAM host associations (Step 4)
+- `investigate_threat` enriched with SOC Insight timeline events via `get_insight_events()`
+- `assess_security_posture` enriched with category filter coverage and content category counts
+- `check_infrastructure_health` enriched with DNS views count
+- 7 new tests for enriched tool outputs and list action (108 total, up from 101)
+
+### Changed
+
+- All 20 tool docstrings rewritten with "USE THIS for X / For Y use tool_name()" disambiguation pattern
+- 9 existing tests updated to expect `ToolError` (Pydantic schema validation) instead of structured JSON for invalid enum values
+
+### Removed
+
+- `timeframe` parameter from `investigate_threat` (was documented as "Not yet implemented")
+
 ## [1.1.1] - 2026-02-22
 
 ### Fixed

@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 
@@ -256,13 +256,12 @@ def resolve_realm(realm_name: str) -> tuple:
 # ==================== Discovery & Exploration Tools ====================
 
 
-@mcp.tool()
-def explore_network(scope: str | None = None, depth: str = "summary") -> dict:
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+def explore_network(scope: str | None = None, depth: Literal["summary", "blocks", "full"] = "summary") -> dict:
     """
-    Explore the Infoblox DDI network hierarchy: IP Spaces → Address Blocks → Subnets.
-    Returns a navigable tree view with utilization data.
-
-    This is the best starting point for understanding what's in your network.
+    Browse the IP hierarchy tree (Spaces → Blocks → Subnets) with utilization data.
+    USE THIS to navigate and drill into network structure.
+    For executive dashboards use get_network_summary(). For keyword search use search_infrastructure().
 
     Args:
         scope: Optional IP space name to focus on (e.g., "prod", "corp"). If not set, shows all spaces.
@@ -370,15 +369,20 @@ def explore_network(scope: str | None = None, depth: str = "summary") -> dict:
     )
 
 
-@mcp.tool()
-def search_infrastructure(query: str, types: list[str] | None = None, limit: int = 20) -> dict:
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+def search_infrastructure(
+    query: str,
+    types: list[Literal["subnets", "dns_zones", "dns_records", "hosts", "addresses"]] | None = None,
+    limit: int = 20,
+) -> dict:
     """
-    Unified search across all Infoblox DDI domains: subnets, DNS records, IPAM hosts, IP addresses.
-    Searches by name, address, comment, or any matching field.
+    Find resources by keyword across all DDI domains (IP, hostname, domain, comment).
+    USE THIS when looking for something specific by name or address.
+    For hierarchy browsing use explore_network(). For dashboards use get_network_summary().
 
     Args:
         query: Search term (IP address, hostname, domain name, comment text, etc.)
-        types: Optional list of resource types to search. Options: "subnets", "dns_zones", "dns_records", "hosts", "addresses". If not set, searches all types.
+        types: Optional list of resource types to search. If not set, searches all types.
         limit: Maximum results per type (default: 20, max: 100)
 
     Returns:
@@ -519,11 +523,12 @@ def search_infrastructure(query: str, types: list[str] | None = None, limit: int
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def get_network_summary(scope: str | None = None) -> dict:
     """
-    Get an executive dashboard of the entire Infoblox DDI infrastructure:
-    IP space counts, subnet counts, DNS zone counts, DHCP status, and utilization.
+    Get an executive dashboard with counts and health across all DDI infrastructure.
+    USE THIS for high-level overviews and reporting.
+    For hierarchy browsing use explore_network(). For keyword search use search_infrastructure().
 
     Args:
         scope: Optional IP space name to focus on. If not set, summarizes everything.
@@ -609,13 +614,14 @@ def get_network_summary(scope: str | None = None) -> dict:
 # ==================== Provisioning Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False})
 def provision_host(
     hostname: str, space: str, ip: str | None = None, zone: str | None = None, comment: str | None = None
 ) -> dict:
     """
-    Provision a complete host in one step: creates IPAM host with IP assignment and optional DNS records.
-    This replaces the manual 2-3 step process of creating an IPAM host, then A record, then PTR record.
+    Provision a complete host in one step: creates IPAM host + IP + optional DNS A/PTR records.
+    USE THIS when adding a new host to the network. For DNS-only changes use provision_dns().
+    To remove a host use decommission_host().
 
     Args:
         hostname: Host name (e.g., "web-prod-01"). If zone is provided, will be used as FQDN: hostname.zone
@@ -774,16 +780,22 @@ def provision_host(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False})
 def provision_dns(
-    name: str, record_type: str, value: str, zone: str | None = None, ttl: int | None = None, comment: str | None = None
+    name: str,
+    record_type: Literal["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"],
+    value: str,
+    zone: str | None = None,
+    ttl: int | None = None,
+    comment: str | None = None,
 ) -> dict:
     """
-    Create a DNS record with automatic zone discovery. If the zone doesn't exist, provides guidance.
+    Create a new DNS record with automatic zone discovery and validation.
+    USE THIS to create records. For update/delete/list use manage_dns_record().
 
     Args:
         name: Record name (e.g., "www" for www.example.com, or full FQDN "www.example.com")
-        record_type: DNS record type — "A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"
+        record_type: DNS record type
         value: Record value — IP for A/AAAA, domain for CNAME/MX/PTR/NS, text for TXT
         zone: DNS zone name (e.g., "example.com"). If not provided, extracted from the name.
         ttl: Time to live in seconds (optional)
@@ -896,11 +908,11 @@ def provision_dns(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def decommission_host(identifier: str, dry_run: bool = True) -> dict:
     """
     Decommission a host: removes IPAM host, DNS records, and releases IP addresses.
-    Performs reverse provisioning with safety checks.
+    USE THIS to fully remove a host. For partial cleanup use manage_dns_record() or manage_ip_reservation().
 
     IMPORTANT: Runs in dry_run mode by default — shows what WOULD be deleted without actually deleting.
     Set dry_run=False to execute the actual decommission.
@@ -1021,11 +1033,12 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
 # ==================== Troubleshooting Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def diagnose_dns(domain: str) -> dict:
     """
-    Diagnose DNS issues for a domain: checks zone existence, record status, and security policies.
-    Provides actionable recommendations for fixing problems.
+    Diagnose DNS resolution problems for a domain: checks zone, records, and security policies.
+    USE THIS when a domain isn't resolving or has DNS issues.
+    For IP-level issues use diagnose_ip_conflict(). For infrastructure-wide health use check_infrastructure_health().
 
     Args:
         domain: Domain name to diagnose (e.g., "web-prod-01.example.com" or "example.com")
@@ -1139,16 +1152,18 @@ def diagnose_dns(domain: str) -> dict:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def diagnose_ip_conflict(address: str) -> dict:
     """
-    Check an IP address for conflicts: overlapping subnets, duplicate reservations, and usage status.
+    Check an IP address for conflicts: overlapping subnets, duplicate reservations, DHCP usage, and host associations.
+    USE THIS when troubleshooting IP conflicts or verifying an IP is safe to use.
+    For DNS-level issues use diagnose_dns(). For infrastructure-wide health use check_infrastructure_health().
 
     Args:
         address: IP address to check (e.g., "10.20.3.50")
 
     Returns:
-        Conflict report with overlapping resources and recommendations
+        Conflict report with overlapping resources, DHCP lease status, host associations, and recommendations
 
     Examples:
         - diagnose_ip_conflict(address="10.20.3.50") → checks for conflicts on this IP
@@ -1207,6 +1222,18 @@ def diagnose_ip_conflict(address: str) -> dict:
     except Exception as e:
         steps.append(step_result("Check IP ranges", "failed", error=str(e)))
 
+    # Step 4: Check IPAM host associations
+    try:
+        hosts = extract_results(client.list_ipam_hosts(filter=f'address=="{sanitize_filter(address)}"'))
+        diagnostics["host_associations"] = [
+            {"id": h.get("id"), "name": h.get("name"), "comment": h.get("comment", "")} for h in hosts
+        ]
+        steps.append(step_result("Check host associations", "success", {"count": len(hosts)}))
+        if len(hosts) > 1:
+            diagnostics["conflicts"].append(f"Multiple IPAM hosts associated with {address}")
+    except Exception as e:
+        steps.append(step_result("Check host associations", "failed", error=str(e)))
+
     conflict_count = len(diagnostics["conflicts"])
     status = "success" if conflict_count == 0 else "partial"
 
@@ -1221,14 +1248,15 @@ def diagnose_ip_conflict(address: str) -> dict:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def check_infrastructure_health() -> dict:
     """
-    Check the health of Infoblox DDI infrastructure: HA groups, DHCP hosts, DNS zones, and services.
-    Provides an overall health score with per-component status.
+    Check the health of all DDI infrastructure components: HA groups, DHCP hosts, DNS zones, DNS views, and IP spaces.
+    USE THIS for operational health monitoring and alerting.
+    For capacity planning use get_ip_utilization(). For security health use assess_security_posture().
 
     Returns:
-        Health report with HA status, DHCP status, DNS status, and recommendations
+        Health report with HA status, DHCP status, DNS status, DNS views, and recommendations
 
     Examples:
         - check_infrastructure_health() → full health check of all DDI components
@@ -1280,6 +1308,18 @@ def check_infrastructure_health() -> dict:
     except Exception as e:
         steps.append(step_result("Check IP spaces", "failed", error=str(e)))
 
+    # Check DNS views
+    try:
+        views = extract_results(client.list_dns_views())
+        health["components"]["dns_views"] = {
+            "count": len(views),
+            "status": "healthy" if views else "no_views",
+            "views": [{"id": v.get("id"), "name": v.get("name")} for v in views],
+        }
+        steps.append(step_result("Check DNS views", "success", {"count": len(views)}))
+    except Exception as e:
+        steps.append(step_result("Check DNS views", "failed", error=str(e)))
+
     # Overall health
     failed_steps = sum(1 for s in steps if s["status"] == "failed")
     issue_count = len(health["issues"])
@@ -1304,22 +1344,24 @@ def check_infrastructure_health() -> dict:
 # ==================== Security & Threat Intelligence Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def investigate_threat(
-    query: str | None = None, priority: str | None = None, timeframe: str | None = None, limit: int = 20
+    query: str | None = None,
+    priority: Literal["critical", "high", "medium", "low"] | None = None,
+    limit: int = 20,
 ) -> dict:
     """
-    Investigate security threats: aggregates SOC insights, threat indicators, and affected assets.
-    Provides a comprehensive threat intelligence view.
+    Investigate active security threats: aggregates SOC insights, indicators, affected assets, and timeline events.
+    USE THIS for threat investigation and incident response.
+    For policy compliance use assess_security_posture(). For triage actions use triage_security_insight().
 
     Args:
         query: Optional search term or threat type (e.g., "malware", "phishing", "data_exfiltration")
-        priority: Filter by priority — "critical", "high", "medium", "low"
-        timeframe: Not yet implemented — reserved for future date filtering
+        priority: Filter by priority level
         limit: Maximum insights to return (default: 20)
 
     Returns:
-        Aggregated threat intelligence with indicators, affected assets, and recommendations
+        Aggregated threat intelligence with indicators, affected assets, events timeline, and recommendations
 
     Examples:
         - investigate_threat() → all open security insights
@@ -1376,6 +1418,23 @@ def investigate_threat(
         except Exception:
             pass
 
+        # Get security events (timeline context)
+        try:
+            events_resp = insights_client.get_insight_events(insight_id, limit=10)
+            events = extract_results(events_resp)
+            enriched["events"] = [
+                {
+                    "type": e.get("type", ""),
+                    "detected_at": e.get("detected_at", ""),
+                    "device_ip": e.get("device_ip", ""),
+                    "threat_level": e.get("threat_level", ""),
+                }
+                for e in events[:10]
+            ]
+            enriched["event_count"] = len(events)
+        except Exception:
+            pass
+
         enriched_insights.append(enriched)
 
     steps.append(step_result("Enrich top insights", "success", {"enriched": len(enriched_insights)}))
@@ -1400,14 +1459,15 @@ def investigate_threat(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def assess_security_posture() -> dict:
     """
-    Assess the overall security posture: reviews security policies, policy compliance,
-    and analytics insights. Provides a security scorecard.
+    Assess overall DNS security posture: policies, named lists, category filters, compliance, and analytics.
+    USE THIS for security audits and compliance reporting.
+    For active threat investigation use investigate_threat(). For triage actions use triage_security_insight().
 
     Returns:
-        Security posture assessment with policy status, compliance findings, and recommendations
+        Security posture assessment with policy status, category filter coverage, compliance findings, and recommendations
 
     Examples:
         - assess_security_posture() → full security assessment
@@ -1440,6 +1500,25 @@ def assess_security_posture() -> dict:
             steps.append(step_result("Check threat named lists", "success", {"count": len(named_lists)}))
         except Exception as e:
             steps.append(step_result("Check threat named lists", "failed", error=str(e)))
+
+    # Check category filters (content filtering coverage)
+    if atcfw_client:
+        try:
+            cat_filters = extract_results(atcfw_client.list_category_filters())
+            posture["category_filters"] = {
+                "count": len(cat_filters),
+                "filters": [{"id": f.get("id"), "name": f.get("name")} for f in cat_filters[:10]],
+            }
+            steps.append(step_result("Check category filters", "success", {"count": len(cat_filters)}))
+        except Exception as e:
+            steps.append(step_result("Check category filters", "failed", error=str(e)))
+
+        try:
+            content_cats = extract_results(atcfw_client.list_content_categories())
+            posture["content_categories"] = {"count": len(content_cats)}
+            steps.append(step_result("Check content categories", "success", {"count": len(content_cats)}))
+        except Exception as e:
+            steps.append(step_result("Check content categories", "failed", error=str(e)))
 
     # Check policy compliance insights
     if insights_client:
@@ -1478,11 +1557,12 @@ def assess_security_posture() -> dict:
 # ==================== Reporting Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 def get_ip_utilization(scope: str | None = None) -> dict:
     """
-    Get IP address utilization for capacity planning.
-    Shows utilization percentages across IP spaces, address blocks, and subnets.
+    Get IP address utilization percentages for capacity planning.
+    USE THIS to find overutilized subnets and plan expansions.
+    For hierarchy browsing use explore_network(). For infrastructure health use check_infrastructure_health().
 
     Args:
         scope: Optional IP space name to focus on. If not set, shows all.
@@ -1571,10 +1651,10 @@ def get_ip_utilization(scope: str | None = None) -> dict:
 # ==================== IPAM Management Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_network(
-    resource_type: str,
-    action: str,
+    resource_type: Literal["ip_space", "address_block", "subnet", "range"],
+    action: Literal["create", "update", "delete", "get", "list"],
     name: str | None = None,
     address: str | None = None,
     space: str | None = None,
@@ -1586,14 +1666,14 @@ def manage_network(
     dry_run: bool = True,
 ) -> dict:
     """
-    Manage IPAM network resources: IP spaces, address blocks, subnets, and IP ranges.
-    Supports create, update, delete, and get operations with safety checks.
+    Manage IPAM network resources: create, update, delete, get, or list IP spaces, address blocks, subnets, and ranges.
+    USE THIS for IPAM CRUD operations. For IP reservations use manage_ip_reservation(). For utilization use get_ip_utilization().
 
     IMPORTANT: Delete runs in dry_run mode by default — shows impact without deleting.
 
     Args:
-        resource_type: "ip_space", "address_block", "subnet", or "range"
-        action: "create", "update", "delete", or "get"
+        resource_type: Type of IPAM network resource to manage
+        action: Operation to perform
         name: Resource name (for create or lookup)
         address: CIDR notation for subnets/blocks (e.g., "10.20.0.0/16"), or IP for ranges
         space: IP space name or ID (required for create)
@@ -1620,15 +1700,15 @@ def manage_network(
     if not valid:
         return intent_response("failed", err)
 
-    valid, err = validate_action(action, ["create", "update", "delete", "get"])
+    valid, err = validate_action(action, ["create", "update", "delete", "get", "list"])
     if not valid:
         return intent_response("failed", err)
 
     steps = []
 
-    # Resolve space if needed for create
+    # Resolve space if needed for create or list
     space_id = None
-    if space and action == "create":
+    if space and action in ("create", "list"):
         space_id, s, err = resolve_space(space)
         if s:
             steps.append(s)
@@ -1642,7 +1722,76 @@ def manage_network(
             return intent_response("failed", err)
 
     try:
-        if action == "create":
+        if action == "list":
+            filters = []
+            if space_id:
+                filters.append(f'space=="{space_id}"')
+            if name:
+                filters.append(f'name~"{sanitize_filter(name)}"')
+            if address:
+                filters.append(f'address~"{sanitize_filter(address)}"')
+            filter_str = " and ".join(filters) if filters else None
+
+            if resource_type == "subnet":
+                resp = client.list_subnets(filter=filter_str, limit=100)
+                items = extract_results(resp)
+                result = [
+                    {
+                        "id": s.get("id"),
+                        "address": s.get("address"),
+                        "cidr": s.get("cidr"),
+                        "name": s.get("name", s.get("comment", "")),
+                        "space": s.get("space"),
+                        "utilization": s.get("utilization", {}),
+                    }
+                    for s in items
+                ]
+            elif resource_type == "address_block":
+                resp = client.list_address_blocks(filter=filter_str, limit=100)
+                items = extract_results(resp)
+                result = [
+                    {
+                        "id": b.get("id"),
+                        "address": b.get("address"),
+                        "cidr": b.get("cidr"),
+                        "name": b.get("name", b.get("comment", "")),
+                        "space": b.get("space"),
+                    }
+                    for b in items
+                ]
+            elif resource_type == "range":
+                resp = client.list_ranges(filter=filter_str, limit=100)
+                items = extract_results(resp)
+                result = [
+                    {
+                        "id": r.get("id"),
+                        "start": r.get("start"),
+                        "end": r.get("end"),
+                        "space": r.get("space"),
+                        "comment": r.get("comment", ""),
+                    }
+                    for r in items
+                ]
+            elif resource_type == "ip_space":
+                resp = client.list_ip_spaces(filter=filter_str, limit=100)
+                items = extract_results(resp)
+                result = [
+                    {
+                        "id": s.get("id"),
+                        "name": s.get("name"),
+                        "comment": s.get("comment", ""),
+                        "utilization": s.get("utilization", {}),
+                    }
+                    for s in items
+                ]
+            else:
+                items = []
+                result = []
+
+            steps.append(step_result(f"List {resource_type}s", "success", {"count": len(items)}))
+            return intent_response("success", f"Found {len(items)} {resource_type}(s)", steps, result=result)
+
+        elif action == "create":
             if resource_type == "subnet":
                 if not address or not space_id:
                     return intent_response("failed", "Subnet create requires 'address' (CIDR) and 'space'.", steps)
@@ -1780,10 +1929,10 @@ def manage_network(
 # ==================== DNS Configuration Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dns_zone(
-    action: str,
-    zone_type: str = "auth",
+    action: Literal["create", "delete", "list", "get"],
+    zone_type: Literal["auth", "forward"] = "auth",
     fqdn: str | None = None,
     primary_type: str | None = None,
     view: str | None = None,
@@ -1793,13 +1942,14 @@ def manage_dns_zone(
     dry_run: bool = True,
 ) -> dict:
     """
-    Manage DNS zones: create/delete authoritative or forward zones, list zones and views.
+    Manage DNS zones: create, delete, list, or get authoritative and forward zones.
+    USE THIS for zone lifecycle operations. For DNS record CRUD use manage_dns_record(). For record creation use provision_dns().
 
     IMPORTANT: Delete runs in dry_run mode by default — checks record count before deleting.
 
     Args:
-        action: "create", "delete", "list", or "get"
-        zone_type: "auth" (authoritative) or "forward" (forwarding zone)
+        action: Operation to perform on the zone
+        zone_type: Zone type — authoritative or forwarding
         fqdn: Zone FQDN for create/delete (e.g., "example.com")
         primary_type: For auth zones — "cloud" or "external"
         view: DNS view name (optional)
@@ -1966,12 +2116,12 @@ def manage_dns_zone(
         return intent_response("failed", f"Failed to {action} {zone_type} zone: {e}", steps)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dns_record(
-    action: str,
+    action: Literal["update", "delete", "list", "get"],
     record_id: str | None = None,
     zone: str | None = None,
-    record_type: str | None = None,
+    record_type: Literal["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"] | None = None,
     name: str | None = None,
     rdata: dict[str, Any] | None = None,
     ttl: int | None = None,
@@ -1980,11 +2130,12 @@ def manage_dns_record(
     limit: int = 50,
 ) -> dict:
     """
-    Manage DNS records: update, delete, list, and get. Complements provision_dns() which creates records.
-    Supports smart lookup by name+zone+type when record_id is not known.
+    Update, delete, list, or get existing DNS records. Supports smart lookup by name+zone+type.
+    USE THIS for record lifecycle after creation. For creating new records use provision_dns().
+    For zone management use manage_dns_zone().
 
     Args:
-        action: "update", "delete", "list", or "get"
+        action: Operation to perform on the record
         record_id: DNS record ID (optional — can look up by name+zone+type)
         zone: DNS zone FQDN for filtering/lookup
         record_type: Record type filter — "A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"
@@ -2138,10 +2289,10 @@ def manage_dns_record(
 # ==================== DHCP Management Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dhcp(
-    resource_type: str,
-    action: str,
+    resource_type: Literal["ha_group", "option_code", "hardware_filter", "option_filter", "hardware"],
+    action: Literal["create", "update", "delete", "get", "list"],
     name: str | None = None,
     resource_id: str | None = None,
     mode: str | None = None,
@@ -2155,10 +2306,11 @@ def manage_dhcp(
 ) -> dict:
     """
     Manage DHCP configuration: HA groups, option codes, hardware filters, option filters, and hardware entries.
+    USE THIS for DHCP-specific CRUD. For IP reservations use manage_ip_reservation(). For network topology use manage_network().
 
     Args:
-        resource_type: "ha_group", "option_code", "hardware_filter", "option_filter", or "hardware"
-        action: "create", "update", "delete", "get", or "list"
+        resource_type: Type of DHCP resource to manage
+        action: Operation to perform
         name: Resource name
         resource_id: Resource ID for get/update/delete
         mode: HA group mode (e.g., "active-active", "active-passive") — for ha_group create
@@ -2348,9 +2500,9 @@ def manage_dhcp(
 # ==================== IP Reservation Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_ip_reservation(
-    action: str,
+    action: Literal["reserve", "release", "list", "get", "update"],
     address: str | None = None,
     space: str | None = None,
     mac: str | None = None,
@@ -2361,11 +2513,12 @@ def manage_ip_reservation(
 ) -> dict:
     """
     Reserve, release, list, get, or update fixed IP addresses and DHCP static leases.
+    USE THIS for IP reservation CRUD. For network topology use manage_network(). For IP conflicts use diagnose_ip_conflict().
 
     IMPORTANT: Release runs in dry_run mode by default — shows host associations before releasing.
 
     Args:
-        action: "reserve", "release", "list", "get", or "update"
+        action: Operation to perform on IP reservations
         address: IP address to reserve/release (e.g., "10.20.3.50")
         space: IP space name or ID (required for reserve)
         mac: MAC address to bind to reservation
@@ -2545,10 +2698,10 @@ def manage_ip_reservation(
 # ==================== Security Policy Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_security_policy(
-    resource_type: str,
-    action: str,
+    resource_type: Literal["policy", "named_list", "app_filter", "internal_domains", "access_code"],
+    action: Literal["create", "update", "delete", "list", "get"],
     name: str | None = None,
     resource_id: str | None = None,
     items: list[str] | None = None,
@@ -2561,14 +2714,14 @@ def manage_security_policy(
     dry_run: bool = True,
 ) -> dict:
     """
-    Manage DNS security resources: policies (read-only), named lists, application filters,
-    internal domain lists, and access codes.
+    Manage DNS security resources: policies (read-only), named lists, application filters, internal domains, and access codes.
+    USE THIS for security policy CRUD. For posture assessment use assess_security_posture(). For threat investigation use investigate_threat().
 
     NOTE: Security policies are read-only via API (list/get only). Named lists support full CRUD.
 
     Args:
-        resource_type: "policy", "named_list", "app_filter", "internal_domains", or "access_code"
-        action: "create", "update", "delete", "list", or "get"
+        resource_type: Type of security resource to manage
+        action: Operation to perform
         name: Resource name
         resource_id: Resource ID for get/update/delete
         items: List of domains/IPs for named lists or internal domain lists
@@ -2756,10 +2909,12 @@ def manage_security_policy(
 # ==================== Federation Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_federation(
-    resource_type: str,
-    action: str,
+    resource_type: Literal[
+        "realm", "block", "delegation", "pool", "overlapping_block", "reserved_block", "forward_delegation"
+    ],
+    action: Literal["create", "update", "delete", "get", "list", "allocate_next"],
     name: str | None = None,
     resource_id: str | None = None,
     address: str | None = None,
@@ -2771,10 +2926,11 @@ def manage_federation(
 ) -> dict:
     """
     Manage federated IPAM: realms, blocks, delegations, pools, overlapping blocks, reserved blocks, and forward delegations.
+    USE THIS for federated/multi-site IPAM operations. For local IPAM use manage_network(). For IP reservations use manage_ip_reservation().
 
     Args:
-        resource_type: "realm", "block", "delegation", "pool", "overlapping_block", "reserved_block", or "forward_delegation"
-        action: "create", "update", "delete", "get", "list", or "allocate_next" (blocks only)
+        resource_type: Type of federation resource to manage
+        action: Operation to perform ("allocate_next" only for blocks)
         name: Resource name (for realms, pools)
         resource_id: Resource ID for get/update/delete
         address: CIDR address for blocks/delegations
@@ -3002,27 +3158,27 @@ def manage_federation(
 # ==================== Security Insight Triage Tools ====================
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def triage_security_insight(
-    action: str,
+    action: Literal["update_status", "bulk_triage", "get_history"],
     insight_id: str | None = None,
     insight_ids: list[str] | None = None,
-    status: str | None = None,
+    status: Literal["IN_PROGRESS", "RESOLVED", "CLOSED", "FALSE_POSITIVE"] | None = None,
     comment: str | None = None,
-    priority_filter: str | None = None,
+    priority_filter: Literal["critical", "high", "medium", "low"] | None = None,
     dry_run: bool = True,
 ) -> dict:
     """
-    Triage security insights: update status, bulk triage by priority, get history.
-    Validates state transitions and supports dry_run for bulk operations.
+    Triage security insights: update status, bulk triage by priority, or get comment history.
+    USE THIS for incident response actions. For investigation use investigate_threat(). For posture review use assess_security_posture().
 
     Args:
-        action: "update_status", "bulk_triage", or "get_history"
+        action: Triage operation to perform
         insight_id: Single insight ID (for update_status, get_history)
         insight_ids: List of insight IDs (for bulk_triage; auto-populated from priority_filter if not set)
-        status: New status — "IN_PROGRESS", "RESOLVED", "CLOSED", or "FALSE_POSITIVE"
+        status: New status for the insight(s)
         comment: Triage comment
-        priority_filter: For bulk_triage — "critical", "high", "medium", "low" (fetches matching open insights)
+        priority_filter: For bulk_triage — fetches matching open insights by priority
         dry_run: If True (default), bulk_triage shows what would be updated. Set False to execute.
 
     Returns:

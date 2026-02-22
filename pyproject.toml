@@ -1,6 +1,6 @@
 [project]
 name = "infoblox-ddi-mcp"
-version = "1.1.1"
+version = "1.2.0"
 description = "Infoblox DDI MCP Server — 20 intent-level workflow tools for agentic AI integration"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
