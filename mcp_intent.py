@@ -869,6 +869,19 @@ def provision_dns(
             )
         )
     except Exception as e:
+        err = str(e)
+        if "409" in err and "already exists" in err.lower():
+            steps.append(step_result(f"Create {rt} record", "skipped", {"reason": "already_exists"}))
+            return intent_response(
+                status="success",
+                summary=f"{rt} record already exists: {name_in_zone}.{zone} → {value} (no changes made)",
+                steps=steps,
+                result={"fqdn": f"{name_in_zone}.{zone}", "type": rt, "value": value, "already_existed": True},
+                next_actions=[
+                    f"Verify: diagnose_dns(domain='{name_in_zone}.{zone}')",
+                    f"Update: manage_dns_record(action='update', name='{name_in_zone}.{zone}', zone='{zone}', record_type='{rt}', ...)",
+                ],
+            )
         return intent_response("failed", f"Failed to create {rt} record: {e}", steps)
 
     return intent_response(
