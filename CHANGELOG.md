@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-03-04
+
+### Added
+
+- **`check_api_health` tool** (tool #23) — verifies API connectivity for all three service clients (DDI, Insights, ATCFW) with response latency reporting
+- **`dry_run` parameter** on `provision_host`, `provision_dns`, and `manage_dhcp_lease` (clear/resend_ddns) — defaults to `True` to prevent accidental resource creation by AI agents
+- **Circuit breaker** on `InsightsClient` — matching the pattern from InfobloxClient and AtcfwClient (pybreaker, 5 failures, 60s reset)
+- **Metrics recording** on `InsightsClient._request()` — API call counts, latency, and status codes now tracked
+- **Transient HTTP error exclusion** from all 3 circuit breakers — 429/502/503/504 errors (already retried by urllib3) no longer count toward breaker failure threshold
+- **Cache invalidation** on write operations — `address_block_cache`, `dns_zone_cache`, and `named_list_cache` are cleared after create/update/delete
+- **`sanitize_filter` hardened** — now truncates input to 512 chars and strips BloxOne filter operators (`==`, `!=`, `~=`, `<=`, `>=`, `!~`) to prevent filter injection
+- 15 new tests (163 total): error scenarios (API failures, partial workflows), sanitize_filter injection, dry_run protection, health endpoint
+
+### Changed
+
+- `provision_host` and `provision_dns` now default to `dry_run=True` — agents must explicitly set `dry_run=False` to create resources
+- `manage_dhcp_lease` clear/resend_ddns now default to `dry_run=True`
+- `manage_dns_zone` docstring enhanced with quick routing guide for resource_type → action mapping
+- Version bumped from 1.6.0 to 1.7.0 (23 MCP tools, 163 tests)
+
 ## [1.6.0] - 2026-03-04
 
 ### Added

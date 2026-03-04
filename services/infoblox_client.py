@@ -29,6 +29,17 @@ dns_zone_cache = TTLCache(maxsize=1000, ttl=300)
 dhcp_option_cache = TTLCache(maxsize=500, ttl=300)
 address_block_cache = TTLCache(maxsize=1000, ttl=300)
 
+# Transient HTTP status codes that should NOT count as circuit breaker failures
+# These are already retried by the resilient session's urllib3 Retry strategy
+TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
+
+
+class TransientHTTPError(requests.exceptions.HTTPError):
+    """HTTP errors with transient status codes (429, 502, 503, 504).
+    Excluded from circuit breaker failure counting since they're already retried."""
+
+    pass
+
 
 # Circuit Breaker Listener for logging state changes and metrics
 class CircuitBreakerListener(pybreaker.CircuitBreakerListener):
@@ -76,6 +87,7 @@ infoblox_breaker = pybreaker.CircuitBreaker(
     reset_timeout=60,  # Try to close after 60 seconds
     exclude=[  # Don't count these as failures
         requests.exceptions.Timeout,
+        TransientHTTPError,
         KeyError,
         ValueError,
     ],
@@ -206,7 +218,12 @@ class InfobloxClient:
                 kwargs["timeout"] = self.timeout
 
             response = self.session.request(method, url, **kwargs)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if response.status_code in TRANSIENT_STATUS_CODES:
+                    raise TransientHTTPError(str(e), response=response) from e
+                raise
             return response
 
         try:
@@ -459,7 +476,9 @@ class InfobloxClient:
             comment: Optional description
         """
         data = {"address": address, "space": space, "comment": comment, **kwargs}
-        return self._request("POST", "/api/ddi/v1/ipam/address_block", json=data)
+        result = self._request("POST", "/api/ddi/v1/ipam/address_block", json=data)
+        address_block_cache.clear()
+        return result
 
     def get_address_block(self, block_id: str) -> dict[str, Any]:
         """Get specific address block by ID"""
@@ -467,11 +486,15 @@ class InfobloxClient:
 
     def update_address_block(self, block_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update address block"""
-        return self._request("PATCH", self._resource_endpoint(block_id, "ipam/address_block"), json=updates)
+        result = self._request("PATCH", self._resource_endpoint(block_id, "ipam/address_block"), json=updates)
+        address_block_cache.clear()
+        return result
 
     def delete_address_block(self, block_id: str) -> dict[str, Any]:
         """Delete address block (moves to recycle bin)"""
-        return self._request("DELETE", self._resource_endpoint(block_id, "ipam/address_block"))
+        result = self._request("DELETE", self._resource_endpoint(block_id, "ipam/address_block"))
+        address_block_cache.clear()
+        return result
 
     # Next-available subnet/address block operations
     def allocate_next_available_subnet(
@@ -990,7 +1013,9 @@ class InfobloxClient:
         if view:
             data["view"] = view
 
-        return self._request("POST", "/api/ddi/v1/dns/auth_zone", json=data)
+        result = self._request("POST", "/api/ddi/v1/dns/auth_zone", json=data)
+        dns_zone_cache.clear()
+        return result
 
     @cached_method(dns_zone_cache)
     def list_forward_zones(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -1030,7 +1055,9 @@ class InfobloxClient:
         if view:
             data["view"] = view
 
-        return self._request("POST", "/api/ddi/v1/dns/forward_zone", json=data)
+        result = self._request("POST", "/api/ddi/v1/dns/forward_zone", json=data)
+        dns_zone_cache.clear()
+        return result
 
     def list_dns_views(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
         """List DNS views"""

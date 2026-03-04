@@ -2,7 +2,7 @@
 Infoblox DDI Intent-Layer MCP Server
 
 High-level workflow tools for agentic AI integration.
-Instead of 98 atomic CRUD operations, this server exposes 20 intent-level tools
+Instead of 98 atomic CRUD operations, this server exposes 23 intent-level tools
 that orchestrate multi-step DDI workflows automatically — covering 100% of the
 Infoblox BloxOne DDI API surface.
 
@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -116,10 +116,21 @@ import ipaddress
 import re
 
 
-def sanitize_filter(value: str) -> str:
+def sanitize_filter(value: str, max_length: int = 512) -> str:
     """Escape user input for safe use in BloxOne API filter expressions.
-    Prevents filter injection by escaping double quotes and backslashes."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    Prevents filter injection by:
+    1. Truncating to max_length to prevent abuse
+    2. Escaping backslashes and double quotes
+    3. Removing BloxOne filter operators that could break out of a quoted value
+    """
+    value = value[:max_length]
+    # Escape backslashes first, then quotes
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+    # Remove filter operators that could break out of the value context
+    for op in ["==", "!=", "~=", "<=", ">=", "!~"]:
+        value = value.replace(op, "")
+    return value
 
 
 def validate_action(action: str, allowed: list[str]) -> tuple:
@@ -689,12 +700,16 @@ def provision_host(
     view: str | None = None,
     subnet: str | None = None,
     auto_dns: bool = True,
+    dry_run: bool = True,
     comment: str | None = None,
 ) -> dict:
     """
     Provision a complete host in one step: creates IPAM host + IP + optional DNS A/PTR records.
     USE THIS when adding a new host to the network. For DNS-only changes use provision_dns().
     To remove a host use decommission_host().
+
+    IMPORTANT: Runs in dry_run mode by default — shows what WOULD be created without actually creating.
+    Set dry_run=False to execute the actual provisioning.
 
     IMPORTANT: When a zone is provided, ASK the user whether they want auto_dns=True (recommended,
     lets the API create DNS records atomically with the host) or auto_dns=False (creates DNS A/PTR
@@ -711,15 +726,16 @@ def provision_host(
         auto_dns: If True (default), DNS records (A + PTR) are auto-generated atomically by the API
                   during host creation — this matches the "Auto-generate DNS records" option in the UI.
                   If False, DNS A and PTR records are created as separate API calls after host creation.
+        dry_run: If True (default), only shows what would be created. Set to False to actually provision.
         comment: Optional description for the host
 
     Returns:
         Complete provisioning result with host, IP, and DNS record details
 
     Examples:
-        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com")
-        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com", auto_dns=False)
-        - provision_host(hostname="db-replica-02", space="corp", subnet="10.10.20.0/24") → auto-assigns IP from subnet
+        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com") → DRY RUN
+        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com", dry_run=False)
+        - provision_host(hostname="db-replica-02", space="corp", subnet="10.10.20.0/24", dry_run=False)
     """
     if not client:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
@@ -791,6 +807,35 @@ def provision_host(
         except Exception as e:
             warnings.append(f"Failed to resolve zone: {e} — DNS records skipped.")
             steps.append(step_result("Resolve DNS zone", "failed", error=str(e)))
+
+    # Dry run: show what would be created without executing
+    if dry_run:
+        plan = {
+            "hostname": hostname,
+            "fqdn": f"{hostname}.{zone}"
+            if zone and not hostname.rstrip(".").endswith(f".{zone.rstrip('.')}")
+            else hostname,
+            "ip": ip or "(auto-assigned)",
+            "space": space,
+            "space_id": space_id,
+            "zone": zone,
+            "zone_id": zone_id,
+            "auto_dns": auto_dns,
+        }
+        steps.append(step_result("Dry run analysis", "success", {"plan": plan}))
+        return intent_response(
+            status="success",
+            summary=f"DRY RUN: Would provision host '{hostname}' with IP {ip or '(auto)'} in space '{space}'",
+            steps=steps,
+            result={"mode": "DRY RUN", "plan": plan},
+            warnings=warnings + ["This is a DRY RUN. Set dry_run=False to actually provision."],
+            next_actions=[
+                f"Execute: provision_host(hostname='{hostname}', space='{space}'"
+                + (f", ip='{ip}'" if ip else "")
+                + (f", zone='{zone}'" if zone else "")
+                + ", dry_run=False)"
+            ],
+        )
 
     # Step 4: Create IPAM host
     try:
@@ -926,11 +971,15 @@ def provision_dns(
     zone: str | None = None,
     view: str | None = None,
     ttl: int | None = None,
+    dry_run: bool = True,
     comment: str | None = None,
 ) -> dict:
     """
     Create a new DNS record with automatic zone discovery and validation.
     USE THIS to create records. For update/delete/list use manage_dns_record().
+
+    IMPORTANT: Runs in dry_run mode by default — shows what WOULD be created without actually creating.
+    Set dry_run=False to execute the actual DNS record creation.
 
     Args:
         name: Record name (e.g., "www" for www.example.com, or full FQDN "www.example.com")
@@ -939,16 +988,16 @@ def provision_dns(
         zone: DNS zone name (e.g., "example.com"). If not provided, extracted from the name.
         view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
         ttl: Time to live in seconds (optional)
+        dry_run: If True (default), only shows what would be created. Set to False to actually create.
         comment: Optional description
 
     Returns:
         Created DNS record details
 
     Examples:
-        - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com")
-        - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com", view="default")
-        - provision_dns(name="app.example.com", record_type="CNAME", value="lb.example.com")
-        - provision_dns(name="example.com", record_type="MX", value="mail.example.com")
+        - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com") → DRY RUN
+        - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com", dry_run=False)
+        - provision_dns(name="app.example.com", record_type="CNAME", value="lb.example.com", dry_run=False)
     """
     if not client:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
@@ -995,6 +1044,33 @@ def provision_dns(
         rdata = {"text": value}
     else:
         rdata = {"text": value}
+
+    # Dry run: show what would be created without executing
+    if dry_run:
+        plan = {
+            "name": name_in_zone,
+            "fqdn": f"{name_in_zone}.{zone}",
+            "type": rt,
+            "value": value,
+            "zone": zone,
+            "zone_id": zone_id,
+            "rdata": rdata,
+        }
+        if ttl:
+            plan["ttl"] = ttl
+        steps.append(step_result("Dry run analysis", "success", {"plan": plan}))
+        return intent_response(
+            status="success",
+            summary=f"DRY RUN: Would create {rt} record: {name_in_zone}.{zone} → {value}",
+            steps=steps,
+            result={"mode": "DRY RUN", "plan": plan},
+            warnings=["This is a DRY RUN. Set dry_run=False to actually create the record."],
+            next_actions=[
+                f"Execute: provision_dns(name='{name}', record_type='{record_type}', value='{value}'"
+                + (f", zone='{zone}'" if zone else "")
+                + ", dry_run=False)"
+            ],
+        )
 
     # Step 3: Create the record
     # The zone_id from resolve_zone(zone, view) is already view-specific
@@ -1425,6 +1501,90 @@ def diagnose_ip_conflict(address: str) -> dict:
         next_actions=[
             "No conflicts — IP is safe to use" if conflict_count == 0 else f"Resolve conflicts before using {address}"
         ],
+    )
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
+def check_api_health() -> dict:
+    """
+    Verify Infoblox API connectivity for all three service clients (DDI, Insights, ATCFW).
+    USE THIS to diagnose connection issues, check if API keys are valid, or verify the MCP server can reach Infoblox.
+    For infrastructure health (HA groups, DNS zones, etc.) use check_infrastructure_health().
+
+    Returns:
+        Health status for each API client with response times
+
+    Examples:
+        - check_api_health() → shows which APIs are reachable and response latency
+    """
+    import time as _time
+
+    steps = []
+    results = {}
+    healthy_count = 0
+    total = 0
+
+    # Check DDI API (InfobloxClient)
+    if client:
+        total += 1
+        try:
+            start = _time.time()
+            client.list_ip_spaces(limit=1)
+            latency_ms = round((_time.time() - start) * 1000)
+            results["ddi_api"] = {"status": "healthy", "latency_ms": latency_ms}
+            steps.append(step_result("DDI API", "success", {"latency_ms": latency_ms}))
+            healthy_count += 1
+        except Exception as e:
+            results["ddi_api"] = {"status": "unreachable", "error": str(e)}
+            steps.append(step_result("DDI API", "failed", error=str(e)))
+    else:
+        results["ddi_api"] = {"status": "not_initialized"}
+        steps.append(step_result("DDI API", "skipped", error="Client not initialized"))
+
+    # Check Insights API
+    if insights_client:
+        total += 1
+        try:
+            start = _time.time()
+            insights_client.list_insights(limit=1)
+            latency_ms = round((_time.time() - start) * 1000)
+            results["insights_api"] = {"status": "healthy", "latency_ms": latency_ms}
+            steps.append(step_result("Insights API", "success", {"latency_ms": latency_ms}))
+            healthy_count += 1
+        except Exception as e:
+            results["insights_api"] = {"status": "unreachable", "error": str(e)}
+            steps.append(step_result("Insights API", "failed", error=str(e)))
+    else:
+        results["insights_api"] = {"status": "not_initialized"}
+        steps.append(step_result("Insights API", "skipped", error="Client not initialized"))
+
+    # Check ATCFW API
+    if atcfw_client:
+        total += 1
+        try:
+            start = _time.time()
+            atcfw_client.list_security_policies(limit=1)
+            latency_ms = round((_time.time() - start) * 1000)
+            results["atcfw_api"] = {"status": "healthy", "latency_ms": latency_ms}
+            steps.append(step_result("ATCFW API", "success", {"latency_ms": latency_ms}))
+            healthy_count += 1
+        except Exception as e:
+            results["atcfw_api"] = {"status": "unreachable", "error": str(e)}
+            steps.append(step_result("ATCFW API", "failed", error=str(e)))
+    else:
+        results["atcfw_api"] = {"status": "not_initialized"}
+        steps.append(step_result("ATCFW API", "skipped", error="Client not initialized"))
+
+    if total == 0:
+        return intent_response("failed", "No API clients initialized. Check INFOBLOX_API_KEY.", steps, result=results)
+
+    status = "success" if healthy_count == total else "partial" if healthy_count > 0 else "failed"
+    return intent_response(
+        status=status,
+        summary=f"API health: {healthy_count}/{total} services reachable",
+        steps=steps,
+        result=results,
+        next_actions=["Use check_infrastructure_health() for DDI component health"],
     )
 
 
@@ -2234,6 +2394,13 @@ def manage_dns_zone(
     Manage DNS zones, views, RPZ, and delegations: create, update, delete, list, get, sign, unsign, check DNSSEC status, reorder.
     USE THIS for zone lifecycle operations. For DNS record CRUD use manage_dns_record(). For record creation use provision_dns().
 
+    Quick routing guide:
+    - Authoritative zones: resource_type="auth_zone" (default) → create, list, get, delete, sign, unsign, dnssec_status
+    - Forward zones: resource_type="forward_zone" → create, list
+    - DNS views: resource_type="dns_view" → create, list, get, update, delete
+    - RPZ (Response Policy Zones): resource_type="rpz" → create, list, get, update, delete, reorder
+    - Delegations: resource_type="delegation" → create, list, get, update, delete
+
     IMPORTANT: Delete runs in dry_run mode by default. sign/unsign/dnssec_status only work with auth_zone. reorder only works with rpz.
 
     Args:
@@ -2975,13 +3142,15 @@ def manage_dhcp_lease(
     state: str | None = None,
     space: str | None = None,
     resource_id: str | None = None,
+    dry_run: bool = True,
     limit: int = 100,
 ) -> dict:
     """
     Manage DHCP leases: list/search active leases, wipe leases, or resend DDNS updates.
     USE THIS for DHCP lease visibility and maintenance. For DHCP configuration use manage_dhcp().
 
-    IMPORTANT: "clear" permanently removes leases. "resend_ddns" re-triggers dynamic DNS updates.
+    IMPORTANT: "clear" permanently removes leases. Runs in dry_run mode by default for clear/resend_ddns.
+    Set dry_run=False to actually execute destructive actions.
 
     Args:
         action: Operation — list, get, clear (wipe lease), or resend_ddns
@@ -2991,6 +3160,7 @@ def manage_dhcp_lease(
         state: Lease state filter (e.g., "issued", "used")
         space: IP space name or ID (required for clear/resend_ddns to resolve address)
         resource_id: Lease resource ID for get
+        dry_run: If True (default), clear/resend_ddns show what would happen. Set to False to execute.
         limit: Max results for list (default 100)
 
     Returns:
@@ -3064,6 +3234,19 @@ def manage_dhcp_lease(
                 return intent_response("failed", f"Cannot resolve IP space: {err}", steps)
 
             command = "clear" if action == "clear" else "resend-ddns"
+
+            if dry_run:
+                plan = {"command": command, "address": address, "space": space, "space_id": space_id}
+                steps.append(step_result("Dry run analysis", "success", {"plan": plan}))
+                verb = "clear" if action == "clear" else "resend DDNS for"
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would {verb} lease at {address}",
+                    steps,
+                    result={"mode": "DRY RUN", "plan": plan},
+                    warnings=[f"This is a DRY RUN. Set dry_run=False to actually {verb} the lease."],
+                )
+
             addr_payload = [{"address": address, "space": space_id}]
             resp = client.send_lease_command(command=command, address=addr_payload)
             verb = "Cleared" if action == "clear" else "Resent DDNS for"
@@ -4354,7 +4537,7 @@ def main():
         print("=" * 60, file=sys.stderr)
         print(f"  Endpoint:  http://{host}:{port}{path}", file=sys.stderr)
         print("  Transport: HTTP streamable (spec-compliant)", file=sys.stderr)
-        print("  Tools:     20 intent-level workflow tools", file=sys.stderr)
+        print("  Tools:     23 intent-level workflow tools", file=sys.stderr)
         print(f"  Auth:      Bearer token {auth_status}", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 
