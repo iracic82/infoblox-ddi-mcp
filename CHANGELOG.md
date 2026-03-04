@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-03-04
+
+### Added
+
+- Auto-IP assignment in `provision_host`: when no `ip` is provided, automatically allocates the next available IP from a subnet via the `nextavailableip` API. New `subnet` parameter allows specifying which subnet to allocate from; auto-selects when only one subnet exists, disambiguates when multiple exist.
+- `get_next_available_ip()` method on `InfobloxClient` — queries next available IP from subnets, ranges, or address blocks via the BloxOne DDI `nextavailableip` endpoint.
+- `auto_dns` parameter on `provision_host`: when `True` (default), DNS A/PTR records are auto-generated atomically by the API during host creation (matches the "Auto-generate DNS records" UI checkbox). When `False`, DNS records are created as separate API calls for more granular control.
+- 4 new tests (125 total): 3 for auto-IP scenarios (single subnet, specific subnet, ambiguous), 1 for auto-DNS with zone, 1 manual-DNS replacement test.
+
+### Changed
+
+- `provision_host` zone resolution now happens before host creation (required for `auto_generate_records` flow)
+- `provision_host` docstring instructs the LLM to ask the user whether they prefer auto or manual DNS creation
+
 ## [1.3.1] - 2026-03-04
 
 ### Fixed

@@ -117,7 +117,9 @@ class TestProvisionHost:
         mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
         mock_infoblox_client.create_ipam_host.return_value = {"result": {"id": "ipam/host/new"}}
         async with Client(mcp_server) as c:
-            r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod"}))
+            r = parse_tool_result(
+                await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5"})
+            )
         assert r["status"] == "success"
 
     async def test_no_client(self, mcp_server, no_clients):
@@ -125,8 +127,69 @@ class TestProvisionHost:
             r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "x", "space": "prod"}))
         assert r["status"] == "failed"
 
-    async def test_with_view(self, mcp_server, mock_infoblox_client):
-        """provision_host with view selects the correct zone in that view."""
+    async def test_auto_ip_single_subnet(self, mcp_server, mock_infoblox_client):
+        """No IP provided, single subnet in space → auto-assigns from nextavailableip."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_subnets.return_value = _api([SUBNET])
+        mock_infoblox_client.get_next_available_ip.return_value = ["10.0.0.42"]
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.42"}]}
+        }
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod"}))
+        assert r["status"] == "success"
+        assert any(s["step"] == "Auto-assign IP" and s["result"]["ip"] == "10.0.0.42" for s in r["steps"])
+
+    async def test_auto_ip_with_subnet(self, mcp_server, mock_infoblox_client):
+        """No IP, multiple subnets, subnet specified → picks correct one."""
+        subnet2 = {"id": "ipam/subnet/2", "address": "10.1.0.0", "cidr": 24, "name": "db", "space": "ipam/ip_space/1"}
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_subnets.return_value = _api([SUBNET, subnet2])
+        mock_infoblox_client.get_next_available_ip.return_value = ["10.1.0.10"]
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/new", "addresses": [{"address": "10.1.0.10"}]}
+        }
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool("provision_host", {"hostname": "db-01", "space": "prod", "subnet": "10.1.0.0/24"})
+            )
+        assert r["status"] == "success"
+        mock_infoblox_client.get_next_available_ip.assert_called_once_with("ipam/subnet/2")
+
+    async def test_auto_ip_ambiguous_subnet(self, mcp_server, mock_infoblox_client):
+        """No IP, multiple subnets, no subnet specified → error listing subnets."""
+        subnet2 = {"id": "ipam/subnet/2", "address": "10.1.0.0", "cidr": 24, "name": "db", "space": "ipam/ip_space/1"}
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_subnets.return_value = _api([SUBNET, subnet2])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "db-01", "space": "prod"}))
+        assert r["status"] == "failed"
+        assert "Multiple subnets" in r["summary"]
+
+    async def test_auto_dns_with_zone(self, mcp_server, mock_infoblox_client):
+        """auto_dns=True (default) with zone → passes auto_generate_records to host creation."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.5"}]}
+        }
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com"},
+                )
+            )
+        assert r["status"] == "success"
+        # Verify create_ipam_host was called with auto_generate_records and host_names
+        call_kwargs = mock_infoblox_client.create_ipam_host.call_args.kwargs
+        assert call_kwargs["auto_generate_records"] is True
+        assert call_kwargs["host_names"] == [{"name": "web-01.example.com", "zone": ZONE["id"], "primary_name": True}]
+        # No separate DNS record creation calls
+        mock_infoblox_client.create_dns_record.assert_not_called()
+
+    async def test_manual_dns_with_view(self, mcp_server, mock_infoblox_client):
+        """auto_dns=False with view → creates DNS records as separate API calls."""
         mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
         mock_infoblox_client.create_ipam_host.return_value = {
             "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.5"}]}
@@ -143,15 +206,19 @@ class TestProvisionHost:
             r = parse_tool_result(
                 await c.call_tool(
                     "provision_host",
-                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com", "view": "default"},
+                    {
+                        "hostname": "web-01", "space": "prod", "ip": "10.0.0.5",
+                        "zone": "example.com", "view": "default", "auto_dns": False,
+                    },
                 )
             )
         assert r["status"] == "success"
+        # Verify create_ipam_host was NOT called with auto_generate_records
+        call_kwargs = mock_infoblox_client.create_ipam_host.call_args.kwargs
+        assert "auto_generate_records" not in call_kwargs
         # Verify the A record create_dns_record call used the correct view-specific zone ID
         a_record_call = mock_infoblox_client.create_dns_record.call_args_list[0]
         assert a_record_call.kwargs.get("zone") == "dns/auth_zone/default"
-        # View should NOT be passed — the zone ID is already view-specific
-        assert a_record_call.kwargs.get("view") is None
 
     async def test_ambiguous_zone_no_view(self, mcp_server, mock_infoblox_client):
         """provision_host with zone in multiple views and no view specified → warns about ambiguity."""

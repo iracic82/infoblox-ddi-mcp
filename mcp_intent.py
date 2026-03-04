@@ -687,6 +687,8 @@ def provision_host(
     ip: str | None = None,
     zone: str | None = None,
     view: str | None = None,
+    subnet: str | None = None,
+    auto_dns: bool = True,
     comment: str | None = None,
 ) -> dict:
     """
@@ -694,12 +696,21 @@ def provision_host(
     USE THIS when adding a new host to the network. For DNS-only changes use provision_dns().
     To remove a host use decommission_host().
 
+    IMPORTANT: When a zone is provided, ASK the user whether they want auto_dns=True (recommended,
+    lets the API create DNS records atomically with the host) or auto_dns=False (creates DNS A/PTR
+    records as separate steps after host creation, giving more control but less atomicity).
+
     Args:
         hostname: Host name (e.g., "web-prod-01"). If zone is provided, will be used as FQDN: hostname.zone
         space: IP space name or ID where the host should be created (e.g., "prod", "corp", or full resource ID)
-        ip: Optional specific IP address. If not provided, Infoblox will auto-assign the next available IP.
+        ip: Optional specific IP address. If not provided, auto-assigns the next available IP from the subnet.
         zone: Optional DNS zone name for creating A/PTR records (e.g., "prod.example.com")
         view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
+        subnet: Optional subnet address (CIDR) or ID for auto-IP assignment (e.g., "10.10.20.0/24").
+                Required when multiple subnets exist in the space and no IP is specified.
+        auto_dns: If True (default), DNS records (A + PTR) are auto-generated atomically by the API
+                  during host creation — this matches the "Auto-generate DNS records" option in the UI.
+                  If False, DNS A and PTR records are created as separate API calls after host creation.
         comment: Optional description for the host
 
     Returns:
@@ -707,8 +718,8 @@ def provision_host(
 
     Examples:
         - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com")
-        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com", view="default")
-        - provision_host(hostname="db-replica-02", space="corp") → auto-assigns IP, no DNS
+        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com", auto_dns=False)
+        - provision_host(hostname="db-replica-02", space="corp", subnet="10.10.20.0/24") → auto-assigns IP from subnet
     """
     if not client:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
@@ -734,99 +745,144 @@ def provision_host(
         except Exception as e:
             return intent_response("failed", f"Failed to resolve IP space: {e}", steps)
 
-    # Step 2: Create IPAM host
+    # Step 2: Resolve IP (auto-assign if not provided)
+    if not ip:
+        try:
+            subnets = extract_results(client.list_subnets(filter=f'space=="{space_id}"'))
+            if not subnets:
+                return intent_response("failed", f"No subnets found in space '{space}' for IP auto-assignment", steps)
+
+            if subnet:
+                # Match by ID or CIDR address
+                target = [
+                    s for s in subnets if s.get("id") == subnet or f"{s.get('address')}/{s.get('cidr')}" == subnet
+                ]
+                if not target:
+                    return intent_response("failed", f"Subnet '{subnet}' not found in space '{space}'", steps)
+                target_subnet_id = target[0]["id"]
+            elif len(subnets) == 1:
+                target_subnet_id = subnets[0]["id"]
+            else:
+                subnet_list = [f"{s.get('address')}/{s.get('cidr')} (id={s.get('id')})" for s in subnets]
+                return intent_response(
+                    "failed",
+                    f"Multiple subnets in space '{space}': {subnet_list}. Specify 'subnet' or 'ip' to disambiguate.",
+                    steps,
+                )
+
+            available_ips = client.get_next_available_ip(target_subnet_id)
+            if not available_ips:
+                return intent_response("failed", "No available IPs in subnet", steps)
+            ip = available_ips[0]
+            steps.append(step_result("Auto-assign IP", "success", {"ip": ip, "subnet": target_subnet_id}))
+        except Exception as e:
+            return intent_response("failed", f"Failed to auto-assign IP: {e}", steps)
+
+    # Step 3: Resolve DNS zone (if zone provided)
+    zone_id = None
+    if zone:
+        try:
+            zone_id, z_step, z_err = resolve_zone(zone, view)
+            if z_step:
+                steps.append(z_step)
+            if z_err:
+                warnings.append(f"{z_err} — DNS records skipped. Create zone first or use provision_dns().")
+                steps.append(step_result("Resolve DNS zone", "skipped", error=z_err))
+        except Exception as e:
+            warnings.append(f"Failed to resolve zone: {e} — DNS records skipped.")
+            steps.append(step_result("Resolve DNS zone", "failed", error=str(e)))
+
+    # Step 4: Create IPAM host
     try:
         fqdn = f"{hostname}.{zone}" if zone else hostname
-        address_config = {"space": space_id}
-        if ip:
-            address_config["address"] = ip
+        address_config = {"space": space_id, "address": ip}
+
+        # auto_dns=True: let the API create DNS records atomically with the host
+        host_kwargs = {}
+        if auto_dns and zone_id:
+            host_kwargs["auto_generate_records"] = True
+            host_kwargs["host_names"] = [{"name": fqdn, "zone": zone_id, "primary_name": True}]
 
         host_resp = client.create_ipam_host(
-            name=fqdn, addresses=[address_config], comment=comment or "Provisioned via intent layer"
+            name=fqdn, addresses=[address_config], comment=comment or "Provisioned via intent layer", **host_kwargs
         )
 
         host_result = host_resp.get("result", host_resp)
         host_id = host_result.get("id", "")
-        # Try to get the assigned IP from the response
         assigned_addresses = host_result.get("addresses", [])
         assigned_ip = ip
         if assigned_addresses:
             assigned_ip = assigned_addresses[0].get("address", ip)
 
-        steps.append(step_result("Create IPAM host", "success", {"host_id": host_id, "fqdn": fqdn, "ip": assigned_ip}))
+        host_step_data = {"host_id": host_id, "fqdn": fqdn, "ip": assigned_ip}
+        if auto_dns and zone_id:
+            host_step_data["dns_auto_generated"] = True
+            host_step_data["zone_id"] = zone_id
+        steps.append(step_result("Create IPAM host", "success", host_step_data))
         created_resources.append({"type": "ipam_host", "id": host_id})
 
     except Exception as e:
         return intent_response("failed", f"Failed to create IPAM host: {e}", steps)
 
-    # Step 3: Create DNS A record (if zone provided)
-    dns_a_id = None
-    if zone:
+    # Steps 5-6: Manual DNS record creation (only when auto_dns=False and zone resolved)
+    if not auto_dns and zone_id:
+        # Step 5: Create DNS A record
+        dns_a_id = None
         try:
-            # Resolve zone (with optional view filtering)
-            # The returned zone_id is already view-specific, no need to pass view to create_dns_record
-            zone_id, z_step, z_err = resolve_zone(zone, view)
-            if z_step:
-                steps.append(z_step)
-            if z_err:
-                warnings.append(f"{z_err} — skipped A record creation. Create zone first or use provision_dns().")
-                steps.append(step_result("Create DNS A record", "skipped", error=z_err))
-            else:
-                a_resp = client.create_dns_record(
-                    name_in_zone=hostname,
-                    zone=zone_id,
-                    record_type="A",
-                    rdata={"address": assigned_ip or ip},
-                    comment=f"Auto-created for host {fqdn}",
+            a_resp = client.create_dns_record(
+                name_in_zone=hostname,
+                zone=zone_id,
+                record_type="A",
+                rdata={"address": assigned_ip or ip},
+                comment=f"Auto-created for host {fqdn}",
+            )
+            dns_a_id = a_resp.get("result", {}).get("id", "")
+            steps.append(
+                step_result(
+                    "Create DNS A record",
+                    "success",
+                    {"record_id": dns_a_id, "name": f"{hostname}.{zone}", "address": assigned_ip or ip},
                 )
-                dns_a_id = a_resp.get("result", {}).get("id", "")
-                steps.append(
-                    step_result(
-                        "Create DNS A record",
-                        "success",
-                        {"record_id": dns_a_id, "name": f"{hostname}.{zone}", "address": assigned_ip or ip},
-                    )
-                )
-                created_resources.append({"type": "dns_a_record", "id": dns_a_id})
-
+            )
+            created_resources.append({"type": "dns_a_record", "id": dns_a_id})
         except Exception as e:
             warnings.append(f"Failed to create A record: {e}")
             steps.append(step_result("Create DNS A record", "failed", error=str(e)))
 
-    # Step 4: Create DNS PTR record (if zone provided and A record succeeded)
-    if zone and assigned_ip and dns_a_id:
-        try:
-            # Build reverse zone lookup — look for existing reverse zone
-            ip_parts = assigned_ip.split(".")
-            reverse_name = ip_parts[3]  # Last octet
-            reverse_zone_fqdn = f"{ip_parts[2]}.{ip_parts[1]}.{ip_parts[0]}.in-addr.arpa."
+        # Step 6: Create DNS PTR record
+        if assigned_ip and dns_a_id:
+            try:
+                ip_parts = assigned_ip.split(".")
+                reverse_name = ip_parts[3]
+                reverse_zone_fqdn = f"{ip_parts[2]}.{ip_parts[1]}.{ip_parts[0]}.in-addr.arpa."
 
-            rev_zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(reverse_zone_fqdn)}"'))
-            if rev_zones:
-                rev_zone_id = rev_zones[0].get("id", "")
-                ptr_resp = client.create_dns_record(
-                    name_in_zone=reverse_name,
-                    zone=rev_zone_id,
-                    record_type="PTR",
-                    rdata={"dname": f"{hostname}.{zone}"},
-                    comment=f"Auto-created for host {fqdn}",
+                rev_zones = extract_results(
+                    client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(reverse_zone_fqdn)}"')
                 )
-                ptr_id = ptr_resp.get("result", {}).get("id", "")
-                steps.append(
-                    step_result(
-                        "Create DNS PTR record",
-                        "success",
-                        {"record_id": ptr_id, "reverse": f"{reverse_name}.{reverse_zone_fqdn}", "points_to": fqdn},
+                if rev_zones:
+                    rev_zone_id = rev_zones[0].get("id", "")
+                    ptr_resp = client.create_dns_record(
+                        name_in_zone=reverse_name,
+                        zone=rev_zone_id,
+                        record_type="PTR",
+                        rdata={"dname": f"{hostname}.{zone}"},
+                        comment=f"Auto-created for host {fqdn}",
                     )
-                )
-                created_resources.append({"type": "dns_ptr_record", "id": ptr_id})
-            else:
-                warnings.append(f"Reverse DNS zone not found for {assigned_ip} — skipped PTR record")
-                steps.append(step_result("Create DNS PTR record", "skipped", error="Reverse zone not found"))
-
-        except Exception as e:
-            warnings.append(f"Failed to create PTR record: {e}")
-            steps.append(step_result("Create DNS PTR record", "failed", error=str(e)))
+                    ptr_id = ptr_resp.get("result", {}).get("id", "")
+                    steps.append(
+                        step_result(
+                            "Create DNS PTR record",
+                            "success",
+                            {"record_id": ptr_id, "reverse": f"{reverse_name}.{reverse_zone_fqdn}", "points_to": fqdn},
+                        )
+                    )
+                    created_resources.append({"type": "dns_ptr_record", "id": ptr_id})
+                else:
+                    warnings.append(f"Reverse DNS zone not found for {assigned_ip} — skipped PTR record")
+                    steps.append(step_result("Create DNS PTR record", "skipped", error="Reverse zone not found"))
+            except Exception as e:
+                warnings.append(f"Failed to create PTR record: {e}")
+                steps.append(step_result("Create DNS PTR record", "failed", error=str(e)))
 
     # Build summary
     success_count = sum(1 for s in steps if s["status"] == "success")
