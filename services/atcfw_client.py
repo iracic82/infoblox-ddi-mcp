@@ -294,6 +294,45 @@ class AtcfwClient:
 
         return self._request("GET", url, params=params, timeout=self.timeout)
 
+    def get_category_filter(self, filter_id: int | str) -> dict[str, Any]:
+        """Get specific category filter by ID"""
+        url = f"{self.base_url}/api/atcfw/v1/category_filters/{filter_id}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def create_category_filter(self, name: str, categories: list[str], description: str = "") -> dict[str, Any]:
+        """
+        Create a content category filter
+
+        Args:
+            name: Filter name
+            categories: List of category names to filter
+            description: Optional description
+        """
+        url = f"{self.base_url}/api/atcfw/v1/category_filters"
+        data = {"name": name, "categories": categories, "description": description}
+        return self._request("POST", url, json=data, timeout=self.timeout)
+
+    def update_category_filter(
+        self, filter_id: int | str, name: str, categories: list[str], description: str = ""
+    ) -> dict[str, Any]:
+        """
+        Update a category filter (full replace via PUT)
+
+        Args:
+            filter_id: Category filter ID
+            name: Filter name (required — full replace)
+            categories: List of category names (required — full replace)
+            description: Optional description
+        """
+        url = f"{self.base_url}/api/atcfw/v1/category_filters/{filter_id}"
+        data = {"name": name, "categories": categories, "description": description}
+        return self._request("PUT", url, json=data, timeout=self.timeout)
+
+    def delete_category_filter(self, filter_id: int | str) -> dict[str, Any]:
+        """Delete a category filter"""
+        url = f"{self.base_url}/api/atcfw/v1/category_filters/{filter_id}"
+        return self._request("DELETE", url, timeout=self.timeout)
+
     def list_content_categories(self) -> dict[str, Any]:
         """List available content categories"""
         url = f"{self.base_url}/api/atcfw/v1/content_categories"

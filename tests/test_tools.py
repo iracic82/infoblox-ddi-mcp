@@ -721,3 +721,256 @@ class TestCheckInfrastructureHealthEnriched:
         assert r["status"] == "success"
         assert "dns_views" in r["result"]["components"]
         assert r["result"]["components"]["dns_views"]["count"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DHCP Lease Management (v1.6.0)
+# ═══════════════════════════════════════════════════════════════════
+
+LEASE = {
+    "id": "dhcp/lease/1",
+    "address": "10.0.0.50",
+    "hardware": "AA:BB:CC:DD:EE:FF",
+    "hostname": "client-01",
+    "state": "used",
+    "starts": "2026-03-01T00:00:00Z",
+    "ends": "2026-03-08T00:00:00Z",
+    "space": "ipam/ip_space/1",
+}
+LBDN = {"id": "dtc/lbdn/1", "name": "app.example.com", "view": "dns/view/1", "comment": ""}
+VIEW = {"id": "dns/view/1", "name": "default", "comment": ""}
+DELEGATION = {"id": "dns/delegation/1", "fqdn": "sub.example.com.", "view": "dns/view/1", "comment": ""}
+CAT_FILTER = {"id": 1, "name": "block-adult", "description": "", "categories": ["Adult Content"]}
+
+
+class TestManageDhcpLease:
+    async def test_list(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dhcp_leases.return_value = _api([LEASE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dhcp_lease", {"action": "list"}))
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+        assert r["result"][0]["address"] == "10.0.0.50"
+
+    async def test_get(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.get_dhcp_lease.return_value = {"result": LEASE}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool("manage_dhcp_lease", {"action": "get", "resource_id": "dhcp/lease/1"})
+            )
+        assert r["status"] == "success"
+
+    async def test_clear(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.send_lease_command.return_value = {"success": True}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool("manage_dhcp_lease", {"action": "clear", "address": "10.0.0.50", "space": "prod"})
+            )
+        assert r["status"] == "success"
+        mock_infoblox_client.send_lease_command.assert_called_once()
+
+    async def test_no_client(self, mcp_server, no_clients):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dhcp_lease", {"action": "list"}))
+        assert r["status"] == "failed"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DTC / GSLB Management (v1.6.0)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestManageDtc:
+    async def test_list_lbdn(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_lbdn.return_value = _api([LBDN])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dtc", {"resource_type": "lbdn", "action": "list"}))
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+        assert r["result"][0]["name"] == "app.example.com"
+
+    async def test_invalid_resource_type(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            with pytest.raises(ToolError, match="literal_error"):
+                await c.call_tool("manage_dtc", {"resource_type": "zone", "action": "list"})
+
+    async def test_no_client(self, mcp_server, no_clients):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dtc", {"resource_type": "lbdn", "action": "list"}))
+        assert r["status"] == "failed"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Expanded DNS Zone Management (v1.6.0)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestManageDnsZoneExpanded:
+    async def test_list_views(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = _api([VIEW])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dns_zone", {"action": "list", "resource_type": "dns_view"}))
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+        assert r["result"][0]["name"] == "default"
+
+    async def test_list_rpz(self, mcp_server, mock_infoblox_client):
+        rpz = {
+            "id": "dns/auth_zone/rpz1",
+            "fqdn": "rpz.example.com.",
+            "primary_type": "cloud",
+            "view": "dns/view/1",
+            "comment": "",
+        }
+        mock_infoblox_client.list_rpz_zones.return_value = _api([rpz])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dns_zone", {"action": "list", "resource_type": "rpz"}))
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+
+    async def test_list_delegations(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_delegations.return_value = _api([DELEGATION])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool("manage_dns_zone", {"action": "list", "resource_type": "delegation"})
+            )
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+
+    async def test_sign_non_auth_fails(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_dns_zone",
+                    {"action": "sign", "resource_type": "forward_zone", "zone_ids": ["dns/auth_zone/1"]},
+                )
+            )
+        assert r["status"] == "failed"
+        assert "only supported for auth_zone" in r["summary"]
+
+    async def test_sign_auth_zone(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.sign_auth_zone.return_value = {"success": True}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_dns_zone",
+                    {"action": "sign", "resource_type": "auth_zone", "zone_ids": ["dns/auth_zone/1"]},
+                )
+            )
+        assert r["status"] == "success"
+
+    async def test_reorder_non_rpz_fails(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_dns_zone",
+                    {"action": "reorder", "resource_type": "auth_zone", "zone_ids": ["id1"]},
+                )
+            )
+        assert r["status"] == "failed"
+        assert "only supported for rpz" in r["summary"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Expanded Network Management (v1.6.0)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestManageNetworkExpanded:
+    async def test_next_available_subnet(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.allocate_next_available_subnet.return_value = {
+            "result": {"id": "ipam/subnet/new", "address": "10.0.1.0", "cidr": 24}
+        }
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_network",
+                    {
+                        "resource_type": "address_block",
+                        "action": "next_available_subnet",
+                        "resource_id": "ipam/address_block/1",
+                        "cidr": 24,
+                    },
+                )
+            )
+        assert r["status"] == "success"
+
+    async def test_next_available_wrong_resource_type(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_network",
+                    {
+                        "resource_type": "subnet",
+                        "action": "next_available_subnet",
+                        "resource_id": "ipam/subnet/1",
+                        "cidr": 28,
+                    },
+                )
+            )
+        assert r["status"] == "failed"
+        assert "only supported for address_block" in r["summary"]
+
+    async def test_next_available_address_block(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.allocate_next_available_address_block.return_value = {
+            "result": {"id": "ipam/address_block/new", "address": "10.1.0.0", "cidr": 20}
+        }
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_network",
+                    {
+                        "resource_type": "address_block",
+                        "action": "next_available_address_block",
+                        "resource_id": "ipam/address_block/1",
+                        "cidr": 20,
+                    },
+                )
+            )
+        assert r["status"] == "success"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Expanded Security Policy Management (v1.6.0)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestManageSecurityPolicyExpanded:
+    async def test_list_category_filters(self, mcp_server, mock_atcfw_client):
+        mock_atcfw_client.list_category_filters.return_value = _api([CAT_FILTER])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool("manage_security_policy", {"resource_type": "category_filter", "action": "list"})
+            )
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+        assert r["result"][0]["name"] == "block-adult"
+
+    async def test_create_category_filter(self, mcp_server, mock_atcfw_client):
+        mock_atcfw_client.create_category_filter.return_value = {"result": {"id": 2, "name": "test-filter"}}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_security_policy",
+                    {
+                        "resource_type": "category_filter",
+                        "action": "create",
+                        "name": "test-filter",
+                        "categories": ["Malware", "Phishing"],
+                    },
+                )
+            )
+        assert r["status"] == "success"
+        mock_atcfw_client.create_category_filter.assert_called_once()
+
+    async def test_delete_category_filter_dry_run(self, mcp_server, mock_atcfw_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_security_policy",
+                    {"resource_type": "category_filter", "action": "delete", "resource_id": "1", "dry_run": True},
+                )
+            )
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
