@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-03-04
+
+### Added
+
+- **`manage_dhcp_lease` tool** (tool #21) — list/search active DHCP leases, wipe leases (`clear`), resend DDNS updates
+- **`manage_dtc` tool** (tool #22) — DTC/GSLB management: LBDNs, pools, servers, and policies with full CRUD
+- **`manage_dns_zone` expanded** — 3 new resource types (`dns_view`, `rpz`, `delegation`) + 5 new actions (`update`, `sign`, `unsign`, `dnssec_status`, `reorder`)
+- **`manage_network` expanded** — 2 new actions (`next_available_subnet`, `next_available_address_block`) for allocating from address blocks
+- **`manage_security_policy` expanded** — `category_filter` resource type with full CRUD (create, update via PUT, delete, list, get)
+- ~25 new client methods on `InfobloxClient`: DHCP leases (3), DNS view CRUD (4), RPZ zone CRUD + reorder (6), DNSSEC operations (3), DNS delegation CRUD (5), next-available subnet/block (2), DTC LBDN/pool/server/policy CRUD (20)
+- 4 new client methods on `AtcfwClient`: category filter get/create/update (PUT)/delete
+- 19 new tests (148 total): DHCP leases, DTC, expanded DNS zones, expanded network, expanded security policy
+
+### Changed
+
+- **`manage_dns_zone` refactored**: `zone_type` parameter renamed to `resource_type` with expanded values (`auth_zone`, `forward_zone`, `dns_view`, `rpz`, `delegation`). Action constraints enforce `sign`/`unsign`/`dnssec_status` only for `auth_zone` and `reorder` only for `rpz`.
+- Version bumped from 1.5.0 to 1.6.0 (22 MCP tools, ~148 tests)
+
 ## [1.5.0] - 2026-03-04
 
 ### Fixed

@@ -473,6 +473,45 @@ class InfobloxClient:
         """Delete address block (moves to recycle bin)"""
         return self._request("DELETE", self._resource_endpoint(block_id, "ipam/address_block"))
 
+    # Next-available subnet/address block operations
+    def allocate_next_available_subnet(
+        self, block_id: str, cidr: int, count: int = 1, comment: str | None = None, **kwargs
+    ) -> dict[str, Any]:
+        """
+        Allocate next available subnet from an address block
+
+        Args:
+            block_id: Parent address block ID
+            cidr: CIDR prefix length (e.g., 24 for /24)
+            count: Number of subnets to allocate
+            comment: Optional description
+        """
+        data = {"cidr": cidr, "count": count, "comment": comment, **kwargs}
+        return self._request(
+            "POST",
+            f"{self._resource_endpoint(block_id, 'ipam/address_block')}/nextavailablesubnet",
+            json=data,
+        )
+
+    def allocate_next_available_address_block(
+        self, block_id: str, cidr: int, count: int = 1, comment: str | None = None, **kwargs
+    ) -> dict[str, Any]:
+        """
+        Allocate next available address block from a parent block
+
+        Args:
+            block_id: Parent address block ID
+            cidr: CIDR prefix length
+            count: Number of blocks to allocate
+            comment: Optional description
+        """
+        data = {"cidr": cidr, "count": count, "comment": comment, **kwargs}
+        return self._request(
+            "POST",
+            f"{self._resource_endpoint(block_id, 'ipam/address_block')}/nextavailableaddressblock",
+            json=data,
+        )
+
     # ==================== DHCP API Methods ====================
 
     # DHCP Host operations
@@ -490,6 +529,37 @@ class InfobloxClient:
     def update_dhcp_host(self, host_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update DHCP host"""
         return self._request("PATCH", self._resource_endpoint(host_id, "dhcp/host"), json=updates)
+
+    # DHCP Lease operations
+    def list_dhcp_leases(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List active DHCP leases"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/lease", params=params)
+
+    def get_dhcp_lease(self, lease_id: str) -> dict[str, Any]:
+        """Get specific DHCP lease by ID"""
+        return self._request("GET", self._resource_endpoint(lease_id, "dhcp/lease"))
+
+    def send_lease_command(
+        self, command: str, address: list[dict[str, str]], subnet: str | None = None, range_: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Send a command to DHCP leases (clear or resend-ddns)
+
+        Args:
+            command: Command to send — "clear" (wipe leases) or "resend-ddns"
+            address: List of address objects [{"address": "10.0.0.1", "space": "ipam/ip_space/..."}]
+            subnet: Optional subnet ID to scope the command
+            range_: Optional range ID to scope the command
+        """
+        data: dict[str, Any] = {"command": command, "address": address}
+        if subnet:
+            data["subnet"] = subnet
+        if range_:
+            data["range"] = range_
+        return self._request("POST", "/api/ddi/v1/dhcp/leases_command", json=data)
 
     # Hardware operations
     def list_hardware(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -970,6 +1040,147 @@ class InfobloxClient:
 
         return self._request("GET", "/api/ddi/v1/dns/view", params=params)
 
+    def get_dns_view(self, view_id: str) -> dict[str, Any]:
+        """Get specific DNS view by ID"""
+        return self._request("GET", self._resource_endpoint(view_id, "dns/view"))
+
+    def create_dns_view(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """
+        Create a DNS view
+
+        Args:
+            name: View name
+            comment: Optional description
+        """
+        data = {"name": name, "comment": comment, **kwargs}
+        return self._request("POST", "/api/ddi/v1/dns/view", json=data)
+
+    def update_dns_view(self, view_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS view"""
+        return self._request("PATCH", self._resource_endpoint(view_id, "dns/view"), json=updates)
+
+    def delete_dns_view(self, view_id: str) -> dict[str, Any]:
+        """Delete DNS view"""
+        return self._request("DELETE", self._resource_endpoint(view_id, "dns/view"))
+
+    # RPZ Zone operations
+    def list_rpz_zones(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List Response Policy Zones"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/auth_zone", params=params)
+
+    def create_rpz_zone(
+        self, name: str, primary_type: str = "cloud", view: str | None = None, comment: str | None = None, **kwargs
+    ) -> dict[str, Any]:
+        """
+        Create a Response Policy Zone
+
+        Args:
+            name: RPZ zone name
+            primary_type: Primary type (cloud, external)
+            view: DNS view ID
+            comment: Optional description
+        """
+        data = {"fqdn": name, "primary_type": primary_type, "comment": comment, **kwargs}
+        if view:
+            data["view"] = view
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone", json=data)
+
+    def get_rpz_zone(self, zone_id: str) -> dict[str, Any]:
+        """Get specific RPZ zone by ID"""
+        return self._request("GET", self._resource_endpoint(zone_id, "dns/auth_zone"))
+
+    def update_rpz_zone(self, zone_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update RPZ zone"""
+        return self._request("PATCH", self._resource_endpoint(zone_id, "dns/auth_zone"), json=updates)
+
+    def delete_rpz_zone(self, zone_id: str) -> dict[str, Any]:
+        """Delete RPZ zone"""
+        return self._request("DELETE", self._resource_endpoint(zone_id, "dns/auth_zone"))
+
+    def reorder_rpz_zones(self, zone_ids: list[str]) -> dict[str, Any]:
+        """
+        Reorder Response Policy Zones
+
+        Args:
+            zone_ids: Ordered list of RPZ zone IDs
+        """
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone/reorder", json={"zone_ids": zone_ids})
+
+    # DNSSEC operations
+    def sign_auth_zone(self, zone_ids: list[str]) -> dict[str, Any]:
+        """
+        Sign authoritative zones with DNSSEC
+
+        Args:
+            zone_ids: List of auth zone IDs to sign
+        """
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone/sign", json={"zone_ids": zone_ids})
+
+    def unsign_auth_zone(self, zone_ids: list[str]) -> dict[str, Any]:
+        """
+        Remove DNSSEC signing from authoritative zones
+
+        Args:
+            zone_ids: List of auth zone IDs to unsign
+        """
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone/unsign", json={"zone_ids": zone_ids})
+
+    def get_dnssec_key_status(self, zone_id: str) -> dict[str, Any]:
+        """
+        Get DNSSEC key status for an authoritative zone
+
+        Args:
+            zone_id: Auth zone ID
+        """
+        return self._request("GET", f"{self._resource_endpoint(zone_id, 'dns/auth_zone')}/dnssec_key_status")
+
+    # DNS Delegation operations
+    def list_dns_delegations(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS delegations"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/delegation", params=params)
+
+    def create_dns_delegation(
+        self,
+        fqdn: str,
+        delegation_servers: list[dict[str, Any]] | None = None,
+        view: str | None = None,
+        comment: str | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """
+        Create a DNS delegation
+
+        Args:
+            fqdn: Delegated zone FQDN
+            delegation_servers: List of delegation server objects
+            view: DNS view ID
+            comment: Optional description
+        """
+        data: dict[str, Any] = {"fqdn": fqdn, "comment": comment, **kwargs}
+        if delegation_servers:
+            data["delegation_servers"] = delegation_servers
+        if view:
+            data["view"] = view
+        return self._request("POST", "/api/ddi/v1/dns/delegation", json=data)
+
+    def get_dns_delegation(self, delegation_id: str) -> dict[str, Any]:
+        """Get specific DNS delegation by ID"""
+        return self._request("GET", self._resource_endpoint(delegation_id, "dns/delegation"))
+
+    def update_dns_delegation(self, delegation_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS delegation"""
+        return self._request("PATCH", self._resource_endpoint(delegation_id, "dns/delegation"), json=updates)
+
+    def delete_dns_delegation(self, delegation_id: str) -> dict[str, Any]:
+        """Delete DNS delegation"""
+        return self._request("DELETE", self._resource_endpoint(delegation_id, "dns/delegation"))
+
     def flush_dns_cache(self, fqdn: str, view_id: str | None = None) -> dict[str, Any]:
         """Flush DNS cache for a specific domain.
 
@@ -1285,3 +1496,119 @@ class InfobloxClient:
     def delete_federated_pool(self, pool_id: str) -> dict[str, Any]:
         """Delete federated pool"""
         return self._request("DELETE", self._resource_endpoint(pool_id, "federation/federated_pool"))
+
+    # ==================== DTC (DNS Traffic Control / GSLB) Methods ====================
+
+    # LBDN operations
+    def list_lbdn(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS Traffic Control LBDNs (Load Balanced Domain Names)"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dtc/lbdn", params=params)
+
+    def create_lbdn(
+        self, name: str, view: str | None = None, dtc_policy: str | None = None, comment: str | None = None, **kwargs
+    ) -> dict[str, Any]:
+        """
+        Create a DTC LBDN
+
+        Args:
+            name: LBDN name
+            view: DNS view ID
+            dtc_policy: DTC policy ID
+            comment: Optional description
+        """
+        data: dict[str, Any] = {"name": name, "comment": comment, **kwargs}
+        if view:
+            data["view"] = view
+        if dtc_policy:
+            data["dtc_policy"] = dtc_policy
+        return self._request("POST", "/api/ddi/v1/dtc/lbdn", json=data)
+
+    def get_lbdn(self, lbdn_id: str) -> dict[str, Any]:
+        """Get specific LBDN by ID"""
+        return self._request("GET", self._resource_endpoint(lbdn_id, "dtc/lbdn"))
+
+    def update_lbdn(self, lbdn_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update LBDN"""
+        return self._request("PATCH", self._resource_endpoint(lbdn_id, "dtc/lbdn"), json=updates)
+
+    def delete_lbdn(self, lbdn_id: str) -> dict[str, Any]:
+        """Delete LBDN"""
+        return self._request("DELETE", self._resource_endpoint(lbdn_id, "dtc/lbdn"))
+
+    # DTC Pool operations
+    def list_dtc_pools(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DTC pools"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dtc/pool", params=params)
+
+    def get_dtc_pool(self, pool_id: str) -> dict[str, Any]:
+        """Get specific DTC pool by ID"""
+        return self._request("GET", self._resource_endpoint(pool_id, "dtc/pool"))
+
+    def create_dtc_pool(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DTC pool"""
+        data = {"name": name, "comment": comment, **kwargs}
+        return self._request("POST", "/api/ddi/v1/dtc/pool", json=data)
+
+    def update_dtc_pool(self, pool_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DTC pool"""
+        return self._request("PATCH", self._resource_endpoint(pool_id, "dtc/pool"), json=updates)
+
+    def delete_dtc_pool(self, pool_id: str) -> dict[str, Any]:
+        """Delete DTC pool"""
+        return self._request("DELETE", self._resource_endpoint(pool_id, "dtc/pool"))
+
+    # DTC Server operations
+    def list_dtc_servers(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DTC servers"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dtc/server", params=params)
+
+    def get_dtc_server(self, server_id: str) -> dict[str, Any]:
+        """Get specific DTC server by ID"""
+        return self._request("GET", self._resource_endpoint(server_id, "dtc/server"))
+
+    def create_dtc_server(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DTC server"""
+        data = {"name": name, "comment": comment, **kwargs}
+        return self._request("POST", "/api/ddi/v1/dtc/server", json=data)
+
+    def update_dtc_server(self, server_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DTC server"""
+        return self._request("PATCH", self._resource_endpoint(server_id, "dtc/server"), json=updates)
+
+    def delete_dtc_server(self, server_id: str) -> dict[str, Any]:
+        """Delete DTC server"""
+        return self._request("DELETE", self._resource_endpoint(server_id, "dtc/server"))
+
+    # DTC Policy operations
+    def list_dtc_policies(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DTC policies"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dtc/policy", params=params)
+
+    def get_dtc_policy(self, policy_id: str) -> dict[str, Any]:
+        """Get specific DTC policy by ID"""
+        return self._request("GET", self._resource_endpoint(policy_id, "dtc/policy"))
+
+    def create_dtc_policy(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DTC policy"""
+        data = {"name": name, "comment": comment, **kwargs}
+        return self._request("POST", "/api/ddi/v1/dtc/policy", json=data)
+
+    def update_dtc_policy(self, policy_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DTC policy"""
+        return self._request("PATCH", self._resource_endpoint(policy_id, "dtc/policy"), json=updates)
+
+    def delete_dtc_policy(self, policy_id: str) -> dict[str, Any]:
+        """Delete DTC policy"""
+        return self._request("DELETE", self._resource_endpoint(policy_id, "dtc/policy"))
