@@ -6,9 +6,48 @@
 
 # Infoblox DDI — MCP Server
 
-> **20 intent-level workflow tools** for managing Infoblox BloxOne DDI via the Model Context Protocol.
+> **23 intent-level workflow tools** for managing Infoblox BloxOne DDI via the Model Context Protocol.
 
-Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, DHCP, IPAM, security, and federation — without being an Infoblox expert. Instead of 98 atomic CRUD operations, this server exposes 20 high-level tools that orchestrate multi-step workflows automatically.
+Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, DHCP, IPAM, security, and federation — without being an Infoblox expert.
+
+---
+
+## Why Intent-Level Tools (Not 1:1 API Mapping)
+
+The Infoblox BloxOne DDI platform has **98+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** that abstract multi-step operations into single calls.
+
+**The problem with 1:1 mapping:**
+
+```
+# What an agent must do to provision a host with 1:1 tools (7 API calls):
+1. list_ip_spaces(filter="name==prod")          → resolve space name to ID
+2. list_subnets(filter="space==ipam/ip_space/1") → find subnets
+3. get_next_available_ip(subnet_id)              → allocate IP
+4. list_auth_zones(filter="fqdn==example.com")   → resolve zone
+5. create_ipam_host(name, addresses, ...)        → create host
+6. create_dns_record(type="A", ...)              → create A record
+7. create_dns_record(type="PTR", ...)            → create PTR record
+```
+
+```
+# Same operation with intent-level tool (1 call):
+provision_host(hostname="web-01", space="prod", zone="example.com")
+```
+
+| Concern | 1:1 Mapping (98 tools) | Intent Layer (23 tools) |
+|---------|----------------------|------------------------|
+| **LLM tool selection** | Agent must choose from 98 tools — high hallucination rate | 23 tools with `USE THIS for X / For Y use Z` disambiguation |
+| **Token efficiency** | 5-7 API calls per workflow, each consuming context window | Single call, single response |
+| **Error handling** | Agent must implement rollback, partial-success, retry | Server-side orchestration with `steps[]` tracking |
+| **Domain knowledge** | Agent needs to know Infoblox resource IDs, filter syntax, API paths | Agent speaks business intent: "provision host", "diagnose DNS" |
+| **Safety** | Every destructive call is directly exposed | `dry_run=True` by default, input validation, filter injection protection |
+| **Consistency** | Each agent builds its own workflow logic | Standardized response envelope (`status`, `summary`, `steps`, `result`, `warnings`, `next_actions`) |
+
+**Key design principles:**
+- **One tool per user intent** — "provision a host", "diagnose DNS", "investigate a threat"
+- **Resolvers handle name→ID mapping** — agents pass human-readable names, not resource IDs
+- **Dry-run by default** on all mutating operations — agents must explicitly opt in
+- **Guided next actions** — every response suggests what to do next, reducing multi-turn back-and-forth
 
 ---
 
@@ -104,7 +143,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop — the 20 tools appear in the tool picker.
+Restart Claude Desktop — the 23 tools appear in the tool picker.
 
 ### Anthropic Python SDK
 
@@ -642,7 +681,7 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
         │  MCP Protocol (stdio or HTTP)
         ▼
 ┌────────────────────────────────────┐
-│  mcp_intent.py                     │  ← This server (20 intent tools)
+│  mcp_intent.py                     │  ← This server (23 intent tools)
 │  Validation · Resolvers            │
 │  Multi-step orchestration          │
 │  Auto-IP · Auto-DNS · Dry-run     │
