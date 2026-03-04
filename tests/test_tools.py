@@ -125,6 +125,54 @@ class TestProvisionHost:
             r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "x", "space": "prod"}))
         assert r["status"] == "failed"
 
+    async def test_with_view(self, mcp_server, mock_infoblox_client):
+        """provision_host with view selects the correct zone in that view."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.5"}]}
+        }
+        mock_infoblox_client.list_dns_views.return_value = _api([{"id": "dns/view/default", "name": "default"}])
+        mock_infoblox_client.list_auth_zones.return_value = _api(
+            [
+                {"id": "dns/auth_zone/azure", "fqdn": "example.com.", "view": "dns/view/azure"},
+                {"id": "dns/auth_zone/default", "fqdn": "example.com.", "view": "dns/view/default"},
+            ]
+        )
+        mock_infoblox_client.create_dns_record.return_value = {"result": {"id": "dns/record/new"}}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com", "view": "default"},
+                )
+            )
+        assert r["status"] == "success"
+        # Verify the A record create_dns_record call used the correct zone (first call, not PTR)
+        a_record_call = mock_infoblox_client.create_dns_record.call_args_list[0]
+        assert a_record_call.kwargs.get("zone") == "dns/auth_zone/default"
+
+    async def test_ambiguous_zone_no_view(self, mcp_server, mock_infoblox_client):
+        """provision_host with zone in multiple views and no view specified → warns about ambiguity."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.5"}]}
+        }
+        mock_infoblox_client.list_auth_zones.return_value = _api(
+            [
+                {"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/azure"},
+                {"id": "dns/auth_zone/2", "fqdn": "example.com.", "view": "dns/view/default"},
+            ]
+        )
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com"},
+                )
+            )
+        # Host creation succeeds but DNS A record is skipped due to ambiguous zone
+        assert any("disambiguate" in w for w in r.get("warnings", []))
+
 
 class TestProvisionDns:
     async def test_happy_path(self, mcp_server, mock_infoblox_client):
@@ -155,6 +203,25 @@ class TestProvisionDns:
             )
         assert r["status"] == "failed"
         assert "zone" in r["summary"].lower()
+
+    async def test_with_view(self, mcp_server, mock_infoblox_client):
+        """provision_dns with view selects the correct zone."""
+        mock_infoblox_client.list_dns_views.return_value = _api([{"id": "dns/view/default", "name": "default"}])
+        mock_infoblox_client.list_auth_zones.return_value = _api(
+            [
+                {"id": "dns/auth_zone/azure", "fqdn": "example.com.", "view": "dns/view/azure"},
+                {"id": "dns/auth_zone/default", "fqdn": "example.com.", "view": "dns/view/default"},
+            ]
+        )
+        mock_infoblox_client.create_dns_record.return_value = {"result": {"id": "dns/record/new"}}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_dns",
+                    {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "example.com", "view": "default"},
+                )
+            )
+        assert r["status"] == "success"
 
 
 class TestDecommissionHost:
@@ -251,11 +318,10 @@ class TestAssessSecurityPosture:
         assert r["status"] == "success"
 
     async def test_no_clients_partial(self, mcp_server, no_clients):
-        """With no clients, still returns success (skipped components)."""
+        """With no clients at all, returns failed (nothing to assess)."""
         async with Client(mcp_server) as c:
             r = parse_tool_result(await c.call_tool("assess_security_posture"))
-        # assess_security_posture doesn't fail on missing clients; it skips
-        assert r["status"] == "success"
+        assert r["status"] == "failed"
 
 
 # ═══════════════════════════════════════════════════════════════════

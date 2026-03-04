@@ -199,30 +199,96 @@ def resolve_space(space_name: str) -> tuple:
         return None, step_result("Resolve IP space", "failed", error=str(e)), str(e)
 
 
-def resolve_zone(zone_fqdn: str) -> tuple:
-    """Resolve DNS zone FQDN to ID. Returns (zone_id, step, error_msg)."""
+def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
+    """Resolve DNS zone FQDN to ID. Returns (zone_id, step, error_msg).
+
+    If view is provided, filters zones to the matching view.
+    If multiple zones match and no view is specified, returns an error listing available views.
+    """
     if not client:
         return None, None, "Infoblox client not initialized"
     if zone_fqdn.startswith("dns/auth_zone/"):
         return zone_fqdn, step_result("Resolve DNS zone", "success", {"zone_id": zone_fqdn}), ""
+
+    # Resolve view name to ID if provided
+    view_id = None
+    if view:
+        view_id, v_step, v_err = resolve_view(view)
+        if v_err:
+            return None, v_step, v_err
+
     try:
         zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_fqdn)}"'))
         if not zones:
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_fqdn}."'))
-        if zones:
-            zone_id = zones[0].get("id", "")
+            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_fqdn)}."'))
+        if not zones:
             return (
-                zone_id,
-                step_result("Resolve DNS zone", "success", {"zone_id": zone_id, "fqdn": zones[0].get("fqdn")}),
+                None,
+                step_result("Resolve DNS zone", "failed", error=f"DNS zone '{zone_fqdn}' not found"),
+                f"DNS zone '{zone_fqdn}' not found",
+            )
+
+        # Filter by view if specified
+        if view_id:
+            zones = [z for z in zones if z.get("view") == view_id]
+            if not zones:
+                return (
+                    None,
+                    step_result(
+                        "Resolve DNS zone",
+                        "failed",
+                        error=f"DNS zone '{zone_fqdn}' not found in view '{view}'",
+                    ),
+                    f"DNS zone '{zone_fqdn}' not found in view '{view}'",
+                )
+
+        # Ambiguity check: multiple zones, no view specified
+        if len(zones) > 1 and not view_id:
+            view_names = [z.get("view", "unknown") for z in zones]
+            return (
+                None,
+                step_result(
+                    "Resolve DNS zone",
+                    "failed",
+                    error=f"Zone '{zone_fqdn}' exists in {len(zones)} views: {view_names}. Specify a view to disambiguate.",
+                ),
+                f"Zone '{zone_fqdn}' exists in {len(zones)} views: {view_names}. Specify a view to disambiguate.",
+            )
+
+        zone_id = zones[0].get("id", "")
+        return (
+            zone_id,
+            step_result("Resolve DNS zone", "success", {"zone_id": zone_id, "fqdn": zones[0].get("fqdn")}),
+            "",
+        )
+    except Exception as e:
+        return None, step_result("Resolve DNS zone", "failed", error=str(e)), str(e)
+
+
+def resolve_view(view_name: str) -> tuple:
+    """Resolve DNS view name to ID. Returns (view_id, step, error_msg)."""
+    if not client:
+        return None, None, "Infoblox client not initialized"
+    if view_name.startswith("dns/view/"):
+        return view_name, step_result("Resolve DNS view", "success", {"view_id": view_name}), ""
+    try:
+        views = extract_results(client.list_dns_views(filter=f'name=="{sanitize_filter(view_name)}"'))
+        if not views:
+            views = extract_results(client.list_dns_views(filter=f'name~"{sanitize_filter(view_name)}"'))
+        if views:
+            view_id = views[0].get("id", "")
+            return (
+                view_id,
+                step_result("Resolve DNS view", "success", {"view_id": view_id, "name": views[0].get("name")}),
                 "",
             )
         return (
             None,
-            step_result("Resolve DNS zone", "failed", error=f"DNS zone '{zone_fqdn}' not found"),
-            f"DNS zone '{zone_fqdn}' not found",
+            step_result("Resolve DNS view", "failed", error=f"DNS view '{view_name}' not found"),
+            f"DNS view '{view_name}' not found",
         )
     except Exception as e:
-        return None, step_result("Resolve DNS zone", "failed", error=str(e)), str(e)
+        return None, step_result("Resolve DNS view", "failed", error=str(e)), str(e)
 
 
 def resolve_realm(realm_name: str) -> tuple:
@@ -616,7 +682,12 @@ def get_network_summary(scope: str | None = None) -> dict:
 
 @mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False})
 def provision_host(
-    hostname: str, space: str, ip: str | None = None, zone: str | None = None, comment: str | None = None
+    hostname: str,
+    space: str,
+    ip: str | None = None,
+    zone: str | None = None,
+    view: str | None = None,
+    comment: str | None = None,
 ) -> dict:
     """
     Provision a complete host in one step: creates IPAM host + IP + optional DNS A/PTR records.
@@ -628,6 +699,7 @@ def provision_host(
         space: IP space name or ID where the host should be created (e.g., "prod", "corp", or full resource ID)
         ip: Optional specific IP address. If not provided, Infoblox will auto-assign the next available IP.
         zone: Optional DNS zone name for creating A/PTR records (e.g., "prod.example.com")
+        view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
         comment: Optional description for the host
 
     Returns:
@@ -635,6 +707,7 @@ def provision_host(
 
     Examples:
         - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com")
+        - provision_host(hostname="web-01", space="prod", ip="10.20.3.50", zone="prod.example.com", view="default")
         - provision_host(hostname="db-replica-02", space="corp") → auto-assigns IP, no DNS
     """
     if not client:
@@ -688,17 +761,28 @@ def provision_host(
 
     # Step 3: Create DNS A record (if zone provided)
     dns_a_id = None
+    resolved_view_id = None
     if zone:
         try:
-            # Find the zone ID
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone)}"'))
-            if zones:
-                zone_id = zones[0].get("id", "")
+            # Resolve zone (with optional view filtering)
+            zone_id, z_step, z_err = resolve_zone(zone, view)
+            if z_step:
+                steps.append(z_step)
+            if z_err:
+                warnings.append(f"{z_err} — skipped A record creation. Create zone first or use provision_dns().")
+                steps.append(step_result("Create DNS A record", "skipped", error=z_err))
+            else:
+                # If view was specified, resolve it for passing to create_dns_record
+                if view:
+                    resolved_view_id, v_step, v_err = resolve_view(view)
+                    # v_step already appended inside resolve_zone, skip duplicate
+
                 a_resp = client.create_dns_record(
                     name_in_zone=hostname,
                     zone=zone_id,
                     record_type="A",
                     rdata={"address": assigned_ip or ip},
+                    view=resolved_view_id,
                     comment=f"Auto-created for host {fqdn}",
                 )
                 dns_a_id = a_resp.get("result", {}).get("id", "")
@@ -710,11 +794,6 @@ def provision_host(
                     )
                 )
                 created_resources.append({"type": "dns_a_record", "id": dns_a_id})
-            else:
-                warnings.append(
-                    f"DNS zone '{zone}' not found — skipped A record creation. Create zone first or use provision_dns()."
-                )
-                steps.append(step_result("Create DNS A record", "skipped", error=f"Zone '{zone}' not found"))
 
         except Exception as e:
             warnings.append(f"Failed to create A record: {e}")
@@ -736,6 +815,7 @@ def provision_host(
                     zone=rev_zone_id,
                     record_type="PTR",
                     rdata={"dname": f"{hostname}.{zone}"},
+                    view=resolved_view_id,
                     comment=f"Auto-created for host {fqdn}",
                 )
                 ptr_id = ptr_resp.get("result", {}).get("id", "")
@@ -786,6 +866,7 @@ def provision_dns(
     record_type: Literal["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"],
     value: str,
     zone: str | None = None,
+    view: str | None = None,
     ttl: int | None = None,
     comment: str | None = None,
 ) -> dict:
@@ -798,6 +879,7 @@ def provision_dns(
         record_type: DNS record type
         value: Record value — IP for A/AAAA, domain for CNAME/MX/PTR/NS, text for TXT
         zone: DNS zone name (e.g., "example.com"). If not provided, extracted from the name.
+        view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
         ttl: Time to live in seconds (optional)
         comment: Optional description
 
@@ -806,6 +888,7 @@ def provision_dns(
 
     Examples:
         - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com")
+        - provision_dns(name="www", record_type="A", value="10.20.3.50", zone="example.com", view="default")
         - provision_dns(name="app.example.com", record_type="CNAME", value="lb.example.com")
         - provision_dns(name="example.com", record_type="MX", value="mail.example.com")
     """
@@ -825,22 +908,16 @@ def provision_dns(
         return intent_response("failed", "Could not determine DNS zone. Provide zone parameter or use FQDN as name.")
 
     # Step 1: Find the zone
-    try:
-        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone)}"'))
-        if not zones:
-            # Try with trailing dot
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone}."'))
-        if not zones:
-            return intent_response(
-                "failed",
-                f"DNS zone '{zone}' not found. Create it first in Infoblox.",
-                steps,
-                next_actions=[f"Create zone '{zone}' in Infoblox Portal, then retry"],
-            )
-        zone_id = zones[0].get("id", "")
-        steps.append(step_result("Find DNS zone", "success", {"zone_id": zone_id, "fqdn": zone}))
-    except Exception as e:
-        return intent_response("failed", f"Failed to find DNS zone: {e}", steps)
+    zone_id, z_step, z_err = resolve_zone(zone, view)
+    if z_step:
+        steps.append(z_step)
+    if z_err:
+        return intent_response(
+            "failed",
+            z_err,
+            steps,
+            next_actions=[f"Create zone '{zone}' in Infoblox Portal, then retry"],
+        )
 
     # Step 2: Build rdata based on record type
     rdata = {}
@@ -861,6 +938,13 @@ def provision_dns(
     else:
         rdata = {"text": value}
 
+    # Resolve view ID for passing to create_dns_record
+    resolved_view_id = None
+    if view:
+        resolved_view_id, v_step, _ = resolve_view(view)
+        if v_step:
+            steps.append(v_step)
+
     # Step 3: Create the record
     try:
         resp = client.create_dns_record(
@@ -868,6 +952,7 @@ def provision_dns(
             zone=zone_id,
             record_type=rt,
             rdata=rdata,
+            view=resolved_view_id,
             ttl=ttl,
             comment=comment or "Created via intent layer",
         )
@@ -933,6 +1018,7 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
 
     steps = []
+    warnings = []
     resources_to_delete = []
     mode = "DRY RUN" if dry_run else "EXECUTING"
 
@@ -987,8 +1073,8 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
                             "name": record.get("absolute_name_spec", ""),
                         }
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"DNS record lookup failed: {e}")
 
     except Exception as e:
         return intent_response("failed", f"Failed to find host: {e}", steps)
@@ -1021,7 +1107,7 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
         summary=summary,
         steps=steps,
         result={"mode": mode, "resources": resources_to_delete, "identifier": identifier},
-        warnings=["This is a DRY RUN. Set dry_run=False to actually delete."] if dry_run else [],
+        warnings=warnings + (["This is a DRY RUN. Set dry_run=False to actually delete."] if dry_run else []),
         next_actions=[
             f"Execute: decommission_host(identifier='{identifier}', dry_run=False)"
             if dry_run
@@ -1034,7 +1120,7 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
-def diagnose_dns(domain: str) -> dict:
+def diagnose_dns(domain: str, view: str | None = None) -> dict:
     """
     Diagnose DNS resolution problems for a domain: checks zone, records, and security policies.
     USE THIS when a domain isn't resolving or has DNS issues.
@@ -1042,12 +1128,14 @@ def diagnose_dns(domain: str) -> dict:
 
     Args:
         domain: Domain name to diagnose (e.g., "web-prod-01.example.com" or "example.com")
+        view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
 
     Returns:
         Diagnostic report with zone status, records found, and recommendations
 
     Examples:
         - diagnose_dns(domain="app.example.com") → checks zone, A/AAAA/CNAME records, security
+        - diagnose_dns(domain="app.example.com", view="default") → checks in specific view
         - diagnose_dns(domain="example.com") → checks zone apex records
     """
     if not client:
@@ -1064,35 +1152,30 @@ def diagnose_dns(domain: str) -> dict:
     # Step 1: Check if zone exists
     zone_found = False
     zone_id = None
-    try:
-        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_part)}"'))
-        if not zones:
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{zone_part}."'))
-        if not zones and "." in zone_part:
-            # Try parent zone
-            parent = zone_part.split(".", 1)[1]
-            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(parent)}"'))
-            if zones:
-                name_part = domain.replace(f".{parent}", "")
-                zone_part = parent
+    zone_id, z_step, z_err = resolve_zone(zone_part, view)
+    if z_err and "." in zone_part:
+        # Try parent zone
+        parent = zone_part.split(".", 1)[1]
+        zone_id, z_step, z_err = resolve_zone(parent, view)
+        if not z_err:
+            name_part = domain.replace(f".{parent}", "")
+            zone_part = parent
 
-        if zones:
-            zone_found = True
-            zone_id = zones[0].get("id", "")
-            diagnostics["zone"] = {"status": "found", "fqdn": zones[0].get("fqdn"), "id": zone_id}
-            steps.append(step_result("Check DNS zone", "success", {"zone": zone_part}))
-        else:
-            diagnostics["zone"] = {"status": "not_found"}
-            diagnostics["issues"].append(f"DNS zone '{zone_part}' not found")
-            steps.append(step_result("Check DNS zone", "failed", error=f"Zone '{zone_part}' not found"))
-    except Exception as e:
-        steps.append(step_result("Check DNS zone", "failed", error=str(e)))
+    if z_step:
+        steps.append(z_step)
+    if not z_err and zone_id:
+        zone_found = True
+        diagnostics["zone"] = {"status": "found", "fqdn": zone_part, "id": zone_id}
+    else:
+        diagnostics["zone"] = {"status": "not_found"}
+        diagnostics["issues"].append(z_err or f"DNS zone '{zone_part}' not found")
+        steps.append(step_result("Check DNS zone", "failed", error=z_err or f"Zone '{zone_part}' not found"))
 
     # Step 2: Check DNS records for this domain
     try:
         records = extract_results(
             client.list_dns_records(
-                filter=f'absolute_name_spec=="{sanitize_filter(domain)}" or absolute_name_spec=="{domain}."'
+                filter=f'absolute_name_spec=="{sanitize_filter(domain)}" or absolute_name_spec=="{sanitize_filter(domain)}."'
             )
         )
         if not records and name_part:
@@ -1372,6 +1455,8 @@ def investigate_threat(
         return intent_response("failed", "Insights client not initialized. Check INFOBLOX_API_KEY.")
 
     steps = []
+    warnings = []
+    limit = min(limit, 100)
 
     # Step 1: Get security insights
     try:
@@ -1404,8 +1489,8 @@ def investigate_threat(
                 for i in indicators[:10]
             ]
             enriched["indicator_count"] = len(indicators)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"Indicator enrichment failed for insight {insight_id}: {e}")
 
         # Get affected assets
         try:
@@ -1415,8 +1500,8 @@ def investigate_threat(
                 {"ip": a.get("ip"), "mac": a.get("mac"), "os": a.get("os_version")} for a in assets[:10]
             ]
             enriched["asset_count"] = len(assets)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"Asset enrichment failed for insight {insight_id}: {e}")
 
         # Get security events (timeline context)
         try:
@@ -1432,8 +1517,8 @@ def investigate_threat(
                 for e in events[:10]
             ]
             enriched["event_count"] = len(events)
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append(f"Event enrichment failed for insight {insight_id}: {e}")
 
         enriched_insights.append(enriched)
 
@@ -1452,6 +1537,7 @@ def investigate_threat(
             "by_priority": {"critical": critical, "high": high},
             "insights": enriched_insights,
         },
+        warnings=warnings,
         next_actions=[
             "Review critical insights and update status",
             "Use assess_security_posture() for policy compliance",
@@ -1472,6 +1558,9 @@ def assess_security_posture() -> dict:
     Examples:
         - assess_security_posture() → full security assessment
     """
+    if not atcfw_client and not insights_client:
+        return intent_response("failed", "No security clients initialized. Check INFOBLOX_API_KEY.")
+
     steps = []
     posture = {"policies": {}, "compliance": {}, "analytics": {}}
 
@@ -1578,6 +1667,7 @@ def get_ip_utilization(scope: str | None = None) -> dict:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
 
     steps = []
+    warnings = []
     utilization = {"spaces": [], "high_utilization": []}
 
     try:
@@ -1612,8 +1702,8 @@ def get_ip_utilization(scope: str | None = None) -> dict:
                         utilization["high_utilization"].append(
                             {"space": space_name, "subnet": s.get("address"), "utilization_pct": util_pct}
                         )
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.append(f"Subnet utilization lookup failed for space '{space_name}': {e}")
 
             utilization["spaces"].append(space_data)
 
@@ -1629,7 +1719,6 @@ def get_ip_utilization(scope: str | None = None) -> dict:
         return intent_response("failed", f"Failed to get utilization: {e}", steps)
 
     high_count = len(utilization["high_utilization"])
-    warnings = []
     if high_count > 0:
         warnings.append(f"{high_count} subnet(s) above 80% utilization — consider expanding")
 
@@ -1898,8 +1987,8 @@ def manage_network(
                         resp = {}
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
-                except Exception:
-                    pass
+                except Exception as e:
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -2016,7 +2105,7 @@ def manage_dns_zone(
             if not resource_id and not fqdn:
                 return intent_response("failed", "Get requires 'resource_id' or 'fqdn'.", steps)
             if fqdn and not resource_id:
-                zone_id, s, err = resolve_zone(fqdn)
+                zone_id, s, err = resolve_zone(fqdn, view)
                 if s:
                     steps.append(s)
                 if err:
@@ -2046,7 +2135,7 @@ def manage_dns_zone(
             # Check if zone already exists
             existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(fqdn)}"'))
             if not existing:
-                existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{fqdn}."'))
+                existing = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(fqdn)}."'))
             if existing:
                 return intent_response("failed", f"Zone '{fqdn}' already exists (ID: {existing[0].get('id')})", steps)
 
@@ -2072,7 +2161,7 @@ def manage_dns_zone(
             if not resource_id and not fqdn:
                 return intent_response("failed", "Delete requires 'resource_id' or 'fqdn'.", steps)
             if fqdn and not resource_id:
-                zone_id, s, err = resolve_zone(fqdn)
+                zone_id, s, err = resolve_zone(fqdn, view)
                 if s:
                     steps.append(s)
                 if err:
@@ -2121,6 +2210,7 @@ def manage_dns_record(
     action: Literal["update", "delete", "list", "get"],
     record_id: str | None = None,
     zone: str | None = None,
+    view: str | None = None,
     record_type: Literal["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"] | None = None,
     name: str | None = None,
     rdata: dict[str, Any] | None = None,
@@ -2138,6 +2228,7 @@ def manage_dns_record(
         action: Operation to perform on the record
         record_id: DNS record ID (optional — can look up by name+zone+type)
         zone: DNS zone FQDN for filtering/lookup
+        view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
         record_type: Record type filter — "A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"
         name: Record name for lookup (e.g., "www" or "www.example.com")
         rdata: New rdata for update (e.g., {"address": "10.0.0.1"} for A record)
@@ -2163,6 +2254,7 @@ def manage_dns_record(
     if not valid:
         return intent_response("failed", err)
 
+    limit = min(limit, 500)
     steps = []
 
     # Smart record lookup: find record_id from name+zone+type
@@ -2178,7 +2270,7 @@ def manage_dns_record(
             filters.append(f'absolute_name_spec=="{sanitize_filter(name)}"')
         elif zone:
             filters.append(f'name_in_zone=="{sanitize_filter(name)}"')
-            zone_id, s, err = resolve_zone(zone)
+            zone_id, s, err = resolve_zone(zone, view)
             if s:
                 steps.append(s)
             if zone_id:
@@ -2201,7 +2293,7 @@ def manage_dns_record(
             filters = []
             zone_id = None
             if zone:
-                zone_id, s, err = resolve_zone(zone)
+                zone_id, s, err = resolve_zone(zone, view)
                 if s:
                     steps.append(s)
                 if zone_id:
@@ -2267,8 +2359,8 @@ def manage_dns_record(
                     resp = client.get_dns_record(rid)
                     result = resp.get("result", resp)
                     steps.append(step_result("Dry run: inspect record", "success", result))
-                except Exception:
-                    pass
+                except Exception as e:
+                    steps.append(step_result("Dry run: inspect record", "failed", error=str(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete DNS record {rid}",
@@ -2477,8 +2569,8 @@ def manage_dhcp(
                     resp = dispatch[resource_type]["get"](resource_id)
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
-                except Exception:
-                    pass
+                except Exception as e:
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -2670,8 +2762,8 @@ def manage_ip_reservation(
                     hosts = extract_results(client.list_ipam_hosts(filter=f'address=="{sanitize_filter(address)}"'))
                     if hosts:
                         warnings.append(f"IP {address} is associated with host(s): {[h.get('name') for h in hosts]}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    warnings.append(f"Host association lookup failed: {e}")
 
             if dry_run:
                 return intent_response(
@@ -3134,8 +3226,8 @@ def manage_federation(
                     resp = dispatch[resource_type]["get"](resource_id)
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
-                except Exception:
-                    pass
+                except Exception as e:
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",

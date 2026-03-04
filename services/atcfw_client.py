@@ -106,8 +106,9 @@ class AtcfwClient:
         if not self.api_key:
             raise ValueError("INFOBLOX_API_KEY environment variable or api_key parameter is required")
 
-        self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"})
+        from services import create_resilient_session
+
+        self.session = create_resilient_session(self.api_key)
 
         # Set timeout for all requests (connect timeout, read timeout)
         self.timeout = (5, 30)
@@ -196,9 +197,7 @@ class AtcfwClient:
     def get_security_policy(self, policy_id: str) -> dict[str, Any]:
         """Get security policy by ID"""
         url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}"
-        r = self.session.get(url, headers=self.session.headers, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, timeout=self.timeout)
 
     # ==================== Named Lists (Custom Threat Intel) ====================
 
@@ -214,9 +213,7 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        r = self.session.get(url, headers=self.session.headers, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def create_named_list(
         self, name: str, type: str, items: list[str] | None = None, description: str = "", tags: dict | None = None
@@ -237,22 +234,17 @@ class AtcfwClient:
         url = f"{self.base_url}/api/atcfw/v1/named_lists"
         payload = {"name": name, "type": type, "description": description, "items": items or [], "tags": tags or {}}
 
-        r = self.session.post(url, headers=self.session.headers, json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("POST", url, json=payload, timeout=self.timeout)
 
     def update_named_list(self, list_id: str, **kwargs) -> dict[str, Any]:
         """Update a named list"""
         url = f"{self.base_url}/api/atcfw/v1/named_lists/{list_id}"
-        r = self.session.put(url, headers=self.session.headers, json=kwargs, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("PUT", url, json=kwargs, timeout=self.timeout)
 
     def delete_named_list(self, list_id: str) -> dict[str, Any]:
         """Delete a named list"""
         url = f"{self.base_url}/api/atcfw/v1/named_lists/{list_id}"
-        r = self.session.delete(url, headers=self.session.headers, timeout=self.timeout)
-        r.raise_for_status()
+        self._request("DELETE", url, timeout=self.timeout)
         return {"status": "deleted", "id": list_id}
 
     # ==================== Application Filters ====================
@@ -264,18 +256,14 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        r = self.session.get(url, headers=self.session.headers, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def create_application_filter(self, name: str, criteria: list[dict], description: str = "") -> dict[str, Any]:
         """Create an application filter"""
         url = f"{self.base_url}/api/atcfw/v1/application_filters"
         payload = {"name": name, "criteria": criteria, "description": description}
 
-        r = self.session.post(url, headers=self.session.headers, json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("POST", url, json=payload, timeout=self.timeout)
 
     # ==================== Category Filters ====================
 
@@ -286,16 +274,12 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        r = self.session.get(url, headers=self.session.headers, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def list_content_categories(self) -> dict[str, Any]:
         """List available content categories"""
         url = f"{self.base_url}/api/atcfw/v1/content_categories"
-        r = self.session.get(url, headers=self.session.headers, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, timeout=self.timeout)
 
     # ==================== Internal Domain Lists ====================
 
@@ -306,9 +290,7 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        r = self.session.get(url, headers=self.session.headers, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def create_internal_domain_list(
         self, name: str, internal_domains: list[str], description: str = "", tags: dict | None = None
@@ -317,9 +299,7 @@ class AtcfwClient:
         url = f"{self.base_url}/api/atcfw/v1/internal_domain_lists"
         payload = {"name": name, "internal_domains": internal_domains, "description": description, "tags": tags or {}}
 
-        r = self.session.post(url, headers=self.session.headers, json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("POST", url, json=payload, timeout=self.timeout)
 
     # ==================== Access Codes (Bypass Codes) ====================
 
@@ -330,9 +310,7 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        r = self.session.get(url, headers=self.session.headers, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def create_access_code(
         self, name: str, activation: str, expiration: str, rules: list[dict] | None = None, description: str = ""
@@ -347,6 +325,4 @@ class AtcfwClient:
             "description": description,
         }
 
-        r = self.session.post(url, headers=self.session.headers, json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._request("POST", url, json=payload, timeout=self.timeout)

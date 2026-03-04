@@ -164,9 +164,9 @@ class MetricsCollector:
                 "count": count,
                 "min_ms": round(sorted_durations[0], 2),
                 "max_ms": round(sorted_durations[-1], 2),
-                "p50_ms": round(sorted_durations[int(count * 0.50)], 2),
-                "p95_ms": round(sorted_durations[int(count * 0.95)], 2),
-                "p99_ms": round(sorted_durations[int(count * 0.99)], 2),
+                "p50_ms": round(sorted_durations[min(count - 1, int(count * 0.50))], 2),
+                "p95_ms": round(sorted_durations[min(count - 1, int(count * 0.95))], 2),
+                "p99_ms": round(sorted_durations[min(count - 1, int(count * 0.99))], 2),
                 "avg_ms": round(sum(sorted_durations) / count, 2),
             }
 

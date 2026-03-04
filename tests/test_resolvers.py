@@ -1,7 +1,7 @@
-"""Tests for resolver functions: resolve_space, resolve_zone, resolve_realm (~18 tests)."""
+"""Tests for resolver functions: resolve_space, resolve_zone, resolve_view, resolve_realm."""
 
 import mcp_intent
-from mcp_intent import resolve_realm, resolve_space, resolve_zone
+from mcp_intent import resolve_realm, resolve_space, resolve_view, resolve_zone
 
 # ── resolve_space ────────────────────────────────────────────────────
 
@@ -88,6 +88,97 @@ class TestResolveZone:
         zone_id, step, err = resolve_zone("example.com")
         assert zone_id is None
         assert "conn refused" in err
+
+    def test_with_view_filter(self, mock_infoblox_client):
+        """When view is specified, filter zones to matching view."""
+        mock_infoblox_client.list_dns_views.return_value = {"results": [{"id": "dns/view/default", "name": "default"}]}
+        mock_infoblox_client.list_auth_zones.return_value = {
+            "results": [
+                {"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/azure"},
+                {"id": "dns/auth_zone/2", "fqdn": "example.com.", "view": "dns/view/default"},
+            ]
+        }
+        zone_id, step, err = resolve_zone("example.com", view="default")
+        assert zone_id == "dns/auth_zone/2"
+        assert err == ""
+
+    def test_with_view_no_match(self, mock_infoblox_client):
+        """When view is specified but zone doesn't exist in that view."""
+        mock_infoblox_client.list_dns_views.return_value = {"results": [{"id": "dns/view/default", "name": "default"}]}
+        mock_infoblox_client.list_auth_zones.return_value = {
+            "results": [
+                {"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/azure"},
+            ]
+        }
+        zone_id, step, err = resolve_zone("example.com", view="default")
+        assert zone_id is None
+        assert "not found in view" in err
+
+    def test_multiple_views_no_view_specified(self, mock_infoblox_client):
+        """When multiple zones match and no view is specified, return error listing views."""
+        mock_infoblox_client.list_auth_zones.return_value = {
+            "results": [
+                {"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/azure"},
+                {"id": "dns/auth_zone/2", "fqdn": "example.com.", "view": "dns/view/default"},
+                {"id": "dns/auth_zone/3", "fqdn": "example.com.", "view": "dns/view/aws"},
+            ]
+        }
+        zone_id, step, err = resolve_zone("example.com")
+        assert zone_id is None
+        assert "3 views" in err
+        assert "disambiguate" in err
+
+    def test_single_zone_no_view_specified(self, mock_infoblox_client):
+        """When only one zone matches, no view needed — backward compatible."""
+        mock_infoblox_client.list_auth_zones.return_value = {
+            "results": [{"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/default"}]
+        }
+        zone_id, step, err = resolve_zone("example.com")
+        assert zone_id == "dns/auth_zone/1"
+        assert err == ""
+
+
+# ── resolve_view ────────────────────────────────────────────────────
+
+
+class TestResolveView:
+    def test_client_none(self, monkeypatch):
+        monkeypatch.setattr(mcp_intent, "client", None)
+        view_id, step, err = resolve_view("default")
+        assert view_id is None
+        assert "not initialized" in err
+
+    def test_id_passthrough(self, mock_infoblox_client):
+        view_id, step, err = resolve_view("dns/view/abc123")
+        assert view_id == "dns/view/abc123"
+        assert step["status"] == "success"
+        assert err == ""
+
+    def test_exact_match(self, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = {"results": [{"id": "dns/view/default", "name": "default"}]}
+        view_id, step, err = resolve_view("default")
+        assert view_id == "dns/view/default"
+        assert err == ""
+
+    def test_fuzzy_match(self, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.side_effect = [
+            {"results": []},
+            {"results": [{"id": "dns/view/azure-priv", "name": "Azure.private-2"}]},
+        ]
+        view_id, step, err = resolve_view("Azure")
+        assert view_id == "dns/view/azure-priv"
+
+    def test_no_match(self, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = {"results": []}
+        view_id, step, err = resolve_view("nonexistent")
+        assert view_id is None
+        assert "not found" in err
+
+    def test_api_exception(self, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.side_effect = Exception("timeout")
+        view_id, step, err = resolve_view("default")
+        assert view_id is None
+        assert "timeout" in err
 
 
 # ── resolve_realm ────────────────────────────────────────────────────

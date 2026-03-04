@@ -142,8 +142,9 @@ class InfobloxClient:
         if not self.api_key:
             raise ValueError("INFOBLOX_API_KEY environment variable or api_key parameter is required")
 
-        self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"})
+        from services import create_resilient_session
+
+        self.session = create_resilient_session(self.api_key)
 
         # Set default timeout: (connect timeout, read timeout)
         self.timeout = (5, 30)  # 5s to connect, 30s to read response
