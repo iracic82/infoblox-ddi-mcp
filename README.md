@@ -641,29 +641,36 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
         │
         │  MCP Protocol (stdio or HTTP)
         ▼
-┌──────────────────────────────┐
-│  mcp_intent.py               │  ← This server (20 intent tools)
-│  Validation · Resolvers      │
-│  Multi-step orchestration    │
-└──────────┬───────────────────┘
+┌────────────────────────────────────┐
+│  mcp_intent.py                     │  ← This server (20 intent tools)
+│  Validation · Resolvers            │
+│  Multi-step orchestration          │
+│  Auto-IP · Auto-DNS · Dry-run     │
+└──────────┬─────────────────────────┘
            │  Direct Python calls
            ▼
-┌──────────────────────────────┐
-│  Service Clients              │
-│  ├─ InfobloxClient (90 ops)  │  ← IPAM, DNS, DHCP, Federation
-│  ├─ InsightsClient (13 ops)  │  ← SOC Insights, Policy Analytics
-│  └─ AtcfwClient (12 ops)     │  ← DNS Security, Threat Lists
-│                               │
-│  Circuit breakers · Caching   │
-│  Connection pooling · Metrics │
-└──────────┬───────────────────┘
+┌────────────────────────────────────┐
+│  Service Clients                    │
+│  ├─ InfobloxClient (90 ops)        │  ← IPAM, DNS, DHCP, Federation,
+│  │   + Infra hosts & services      │     Infrastructure Management
+│  ├─ InsightsClient (13 ops)        │  ← SOC Insights, Policy Analytics
+│  └─ AtcfwClient (12 ops)           │  ← DNS Security, Threat Lists
+│                                     │
+│  Circuit breakers · Caching         │
+│  Connection pooling · Metrics       │
+│  Resource ID normalization          │
+└──────────┬─────────────────────────┘
            │  HTTPS (REST API)
            ▼
-┌──────────────────────────────┐
-│  Infoblox CSP Portal          │
-│  BloxOne DDI APIs             │
-│  Your tenant · Your API key   │
-└──────────────────────────────┘
+┌────────────────────────────────────┐
+│  Infoblox CSP Portal                │
+│  BloxOne DDI APIs                   │
+│  ├─ /api/ddi/v1    (DDI)           │
+│  ├─ /api/atcfw/v1  (Security)      │
+│  ├─ /api/infra/v1  (Infra Health)  │
+│  └─ /api/v2        (Insights)      │
+│  Your tenant · Your API key         │
+└────────────────────────────────────┘
 ```
 
 ---
