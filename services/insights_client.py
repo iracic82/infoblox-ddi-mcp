@@ -34,8 +34,9 @@ class InsightsClient:
         if not self.api_key:
             raise ValueError("INFOBLOX_API_KEY environment variable or api_key parameter is required")
 
-        self.session = requests.Session()
-        self.session.headers.update({"Authorization": f"Token {self.api_key}", "Content-Type": "application/json"})
+        from services import create_resilient_session
+
+        self.session = create_resilient_session(self.api_key)
 
         # Set timeout for all requests (connect timeout, read timeout)
         self.timeout = (5, 30)
@@ -60,7 +61,13 @@ class InsightsClient:
             response.raise_for_status()
             return response.json() if response.text else {}
         except requests.exceptions.RequestException as e:
-            return {"error": str(e), "status_code": getattr(e.response, "status_code", None)}
+            logger.error(
+                "insights_api_request_failed",
+                endpoint=endpoint,
+                error=str(e),
+                status_code=getattr(e.response, "status_code", None),
+            )
+            raise
 
     # ============================================================
     # Insights Management
