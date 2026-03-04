@@ -761,10 +761,10 @@ def provision_host(
 
     # Step 3: Create DNS A record (if zone provided)
     dns_a_id = None
-    resolved_view_id = None
     if zone:
         try:
             # Resolve zone (with optional view filtering)
+            # The returned zone_id is already view-specific, no need to pass view to create_dns_record
             zone_id, z_step, z_err = resolve_zone(zone, view)
             if z_step:
                 steps.append(z_step)
@@ -772,17 +772,11 @@ def provision_host(
                 warnings.append(f"{z_err} — skipped A record creation. Create zone first or use provision_dns().")
                 steps.append(step_result("Create DNS A record", "skipped", error=z_err))
             else:
-                # If view was specified, resolve it for passing to create_dns_record
-                if view:
-                    resolved_view_id, v_step, v_err = resolve_view(view)
-                    # v_step already appended inside resolve_zone, skip duplicate
-
                 a_resp = client.create_dns_record(
                     name_in_zone=hostname,
                     zone=zone_id,
                     record_type="A",
                     rdata={"address": assigned_ip or ip},
-                    view=resolved_view_id,
                     comment=f"Auto-created for host {fqdn}",
                 )
                 dns_a_id = a_resp.get("result", {}).get("id", "")
@@ -815,7 +809,6 @@ def provision_host(
                     zone=rev_zone_id,
                     record_type="PTR",
                     rdata={"dname": f"{hostname}.{zone}"},
-                    view=resolved_view_id,
                     comment=f"Auto-created for host {fqdn}",
                 )
                 ptr_id = ptr_resp.get("result", {}).get("id", "")
@@ -938,21 +931,14 @@ def provision_dns(
     else:
         rdata = {"text": value}
 
-    # Resolve view ID for passing to create_dns_record
-    resolved_view_id = None
-    if view:
-        resolved_view_id, v_step, _ = resolve_view(view)
-        if v_step:
-            steps.append(v_step)
-
     # Step 3: Create the record
+    # The zone_id from resolve_zone(zone, view) is already view-specific
     try:
         resp = client.create_dns_record(
             name_in_zone=name_in_zone,
             zone=zone_id,
             record_type=rt,
             rdata=rdata,
-            view=resolved_view_id,
             ttl=ttl,
             comment=comment or "Created via intent layer",
         )
