@@ -6,7 +6,7 @@
 
 # Infoblox DDI — MCP Server
 
-> **23 intent-level workflow tools** for managing Infoblox BloxOne DDI via the Model Context Protocol.
+> **23 intent-level workflow tools** for managing Infoblox Universal DDI via the Model Context Protocol.
 
 Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, DHCP, IPAM, security, and federation — without being an Infoblox expert.
 
@@ -14,7 +14,7 @@ Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, D
 
 ## Why Intent-Level Tools (Not 1:1 API Mapping)
 
-The Infoblox BloxOne DDI platform has **98+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** that abstract multi-step operations into single calls.
+The Infoblox Universal DDI platform has **98+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** that abstract multi-step operations into single calls.
 
 **The problem with 1:1 mapping:**
 
@@ -703,7 +703,7 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
            ▼
 ┌────────────────────────────────────┐
 │  Infoblox CSP Portal                │
-│  BloxOne DDI APIs                   │
+│  Universal DDI APIs                   │
 │  ├─ /api/ddi/v1    (DDI)           │
 │  ├─ /api/atcfw/v1  (Security)      │
 │  ├─ /api/infra/v1  (Infra Health)  │
