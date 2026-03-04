@@ -310,6 +310,23 @@ class InfobloxClient:
 
         return self._request("GET", "/api/ddi/v1/ipam/address", params=params)
 
+    def get_next_available_ip(self, resource_id: str, count: int = 1) -> list[str]:
+        """Get next available IP address(es) from a subnet, range, or address block.
+
+        Args:
+            resource_id: Resource ID — works for subnets ("ipam/subnet/..."),
+                         ranges ("ipam/range/..."), or address blocks ("ipam/address_block/...")
+            count: Number of IPs to retrieve (default 1)
+
+        Returns:
+            List of available IP address strings
+        """
+        resp = self._request(
+            "GET", f"/api/ddi/v1/{resource_id}/nextavailableip", params={"count": count, "contiguous": False}
+        )
+        results = resp.get("results", [])
+        return [r["address"] for r in results]
+
     # IPAM Host operations
     def list_ipam_hosts(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
         """
