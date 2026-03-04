@@ -16,3 +16,4 @@ venv/
 *.swo
 .DS_Store
 .idea/
+CLAUDE.md
