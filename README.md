@@ -286,17 +286,17 @@ curl -X POST http://127.0.0.1:4005/mcp \
 
 | Tool | Description |
 |------|-------------|
-| `provision_host` | Create host + IP + A record + PTR in one call (replaces 3 API calls) |
+| `provision_host` | Create host + IP + DNS in one call. Supports auto-IP from subnet and auto-DNS (atomic A/PTR via API) or manual DNS creation |
 | `provision_dns` | Create a new DNS record with automatic zone discovery and validation |
-| `decommission_host` | Reverse provisioning with dry-run safety — removes host, DNS, and IP |
+| `decommission_host` | Reverse provisioning with dry-run safety — detects auto-generated DNS (system records) vs manual DNS and handles each correctly |
 
 ### Troubleshooting (Read-only)
 
 | Tool | Description |
 |------|-------------|
-| `diagnose_dns` | Diagnose DNS resolution problems: zone, records, and security policies |
+| `diagnose_dns` | Diagnose DNS resolution problems: zone, records, security policies, and optional cache flush |
 | `diagnose_ip_conflict` | Detect overlapping subnets, duplicate reservations, DHCP usage, and host associations |
-| `check_infrastructure_health` | HA groups, DHCP hosts, DNS zones, DNS views, IP spaces, and service health |
+| `check_infrastructure_health` | HA groups, DHCP hosts, DNS zones, DNS views, IP spaces, on-prem appliance and service health |
 
 ### Security (Read + Write)
 
@@ -304,7 +304,7 @@ curl -X POST http://127.0.0.1:4005/mcp \
 |------|-------------|
 | `investigate_threat` | SOC insights with threat indicators, affected assets, and timeline events |
 | `assess_security_posture` | Security policies, category filters, compliance, and analytics scorecard |
-| `manage_security_policy` | CRUD for named lists, app filters, internal domains, access codes |
+| `manage_security_policy` | CRUD for named lists (with partial add/remove items), app filters, internal domains, access codes |
 | `triage_security_insight` | Update status, bulk triage by priority, get comment history |
 
 ### IPAM Management (CRUD)
@@ -381,10 +381,16 @@ This makes it easy for any LLM to:
 → Resolves space name → ID, validates CIDR, creates subnet
 ```
 
-**"Set up a new host called web-prod-01 at 10.20.3.50"**
+**"Set up a new host called web-prod-01 in the prod space"**
 ```
-→ provision_host(hostname="web-prod-01", ip="10.20.3.50", space="prod", zone="example.com")
-→ Creates IPAM host + A record + PTR record in one step
+→ provision_host(hostname="web-prod-01", space="prod", subnet="10.20.3.0/24", zone="example.com", view="default")
+→ Auto-assigns next available IP (10.20.3.50), creates IPAM host + DNS A/PTR atomically
+```
+
+**"Provision web-prod-02 but I want to manage DNS records separately"**
+```
+→ provision_host(hostname="web-prod-02", ip="10.20.3.51", space="prod", zone="example.com", auto_dns=False)
+→ Creates IPAM host, then A and PTR records as separate API calls
 ```
 
 **"DNS isn't working for api.example.com"**
@@ -617,7 +623,7 @@ make run            Run MCP server (stdio)
 make run-http       Run MCP server (HTTP)
 make lint           Run ruff linter
 make format         Run ruff formatter
-make test           Run test suite (108 tests)
+make test           Run test suite (129 tests)
 make docker-build   Build Docker image
 make docker-run     Run Docker container
 make docker-up      Start with docker compose
@@ -644,9 +650,9 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
            ▼
 ┌──────────────────────────────┐
 │  Service Clients              │
-│  ├─ InfobloxClient (85 ops)  │  ← IPAM, DNS, DHCP, Federation
+│  ├─ InfobloxClient (90 ops)  │  ← IPAM, DNS, DHCP, Federation
 │  ├─ InsightsClient (13 ops)  │  ← SOC Insights, Policy Analytics
-│  └─ AtcfwClient (11 ops)     │  ← DNS Security, Threat Lists
+│  └─ AtcfwClient (12 ops)     │  ← DNS Security, Threat Lists
 │                               │
 │  Circuit breakers · Caching   │
 │  Connection pooling · Metrics │
@@ -668,11 +674,11 @@ Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
 infoblox-ddi-mcp/
 ├── mcp_intent.py              ← MCP server entry point (run this)
 ├── services/
-│   ├── infoblox_client.py     ← Infoblox DDI API client (85 methods)
+│   ├── infoblox_client.py     ← Infoblox DDI API client (90 methods)
 │   ├── insights_client.py     ← SOC Insights API client (13 methods)
-│   ├── atcfw_client.py        ← DNS Security API client (11 methods)
+│   ├── atcfw_client.py        ← DNS Security API client (12 methods)
 │   └── metrics.py             ← Internal metrics collection
-├── tests/                     ← 108 tests (validators, resolvers, tools, resources)
+├── tests/                     ← 129 tests (validators, resolvers, tools, resources)
 │   ├── conftest.py
 │   ├── test_validation.py
 │   ├── test_resolvers.py
