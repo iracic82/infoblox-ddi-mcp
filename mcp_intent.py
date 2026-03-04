@@ -794,14 +794,23 @@ def provision_host(
 
     # Step 4: Create IPAM host
     try:
-        fqdn = f"{hostname}.{zone}" if zone else hostname
+        # Build FQDN and short name: avoid doubling if hostname already includes the zone
+        zone_suffix = zone.rstrip(".") if zone else ""
+        if zone and not hostname.rstrip(".").endswith(f".{zone_suffix}"):
+            fqdn = f"{hostname}.{zone}"
+            name_in_zone = hostname  # e.g. "web-prod" for zone "infolab.com"
+        else:
+            fqdn = hostname
+            # Strip zone suffix to get the short name for DNS
+            name_in_zone = hostname.rstrip(".").removesuffix(f".{zone_suffix}") if zone_suffix else hostname
         address_config = {"space": space_id, "address": ip}
 
         # auto_dns=True: let the API create DNS records atomically with the host
+        # host_names[].name must be the short name (relative to zone), not the FQDN
         host_kwargs = {}
         if auto_dns and zone_id:
             host_kwargs["auto_generate_records"] = True
-            host_kwargs["host_names"] = [{"name": fqdn, "zone": zone_id, "primary_name": True}]
+            host_kwargs["host_names"] = [{"name": name_in_zone, "zone": zone_id, "primary_name": True}]
 
         host_resp = client.create_ipam_host(
             name=fqdn, addresses=[address_config], comment=comment or "Provisioned via intent layer", **host_kwargs
@@ -830,7 +839,7 @@ def provision_host(
         dns_a_id = None
         try:
             a_resp = client.create_dns_record(
-                name_in_zone=hostname,
+                name_in_zone=name_in_zone,
                 zone=zone_id,
                 record_type="A",
                 rdata={"address": assigned_ip or ip},
@@ -841,7 +850,7 @@ def provision_host(
                 step_result(
                     "Create DNS A record",
                     "success",
-                    {"record_id": dns_a_id, "name": f"{hostname}.{zone}", "address": assigned_ip or ip},
+                    {"record_id": dns_a_id, "name": fqdn, "address": assigned_ip or ip},
                 )
             )
             created_resources.append({"type": "dns_a_record", "id": dns_a_id})
@@ -865,7 +874,7 @@ def provision_host(
                         name_in_zone=reverse_name,
                         zone=rev_zone_id,
                         record_type="PTR",
-                        rdata={"dname": f"{hostname}.{zone}"},
+                        rdata={"dname": fqdn},
                         comment=f"Auto-created for host {fqdn}",
                     )
                     ptr_id = ptr_resp.get("result", {}).get("id", "")
@@ -1093,30 +1102,39 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
             host_id = host.get("id", "")
             host_name = host.get("name", "")
             host_addresses = host.get("addresses", [])
+            auto_dns = host.get("auto_generate_records", False)
 
-            resources_to_delete.append({"type": "ipam_host", "id": host_id, "name": host_name})
+            resources_to_delete.append(
+                {"type": "ipam_host", "id": host_id, "name": host_name, "auto_generate_records": auto_dns}
+            )
 
-            # Find associated DNS records
+            # Find associated IP addresses (released automatically when host is deleted)
             for addr_info in host_addresses:
                 addr = addr_info.get("address", "")
                 if addr:
-                    resources_to_delete.append({"type": "ip_release", "address": addr})
+                    resources_to_delete.append({"type": "ip_release", "address": addr, "auto_released": True})
 
             # Search for DNS records matching this host
-            try:
-                dns_records = extract_results(
-                    client.list_dns_records(filter=f'absolute_name_spec~"{sanitize_filter(host_name)}"')
+            # If auto_generate_records=True, DNS records are system-managed and auto-deleted with the host
+            if auto_dns:
+                resources_to_delete.append(
+                    {"type": "dns_auto_managed", "note": "DNS records auto-generated; will be deleted with host"}
                 )
-                for record in dns_records:
-                    resources_to_delete.append(
-                        {
-                            "type": f"dns_{record.get('type', 'unknown')}_record",
-                            "id": record.get("id", ""),
-                            "name": record.get("absolute_name_spec", ""),
-                        }
+            else:
+                try:
+                    dns_records = extract_results(
+                        client.list_dns_records(filter=f'absolute_name_spec~"{sanitize_filter(host_name)}"')
                     )
-            except Exception as e:
-                warnings.append(f"DNS record lookup failed: {e}")
+                    for record in dns_records:
+                        resources_to_delete.append(
+                            {
+                                "type": f"dns_{record.get('type', 'unknown')}_record",
+                                "id": record.get("id", ""),
+                                "name": record.get("absolute_name_spec", ""),
+                            }
+                        )
+                except Exception as e:
+                    warnings.append(f"DNS record lookup failed: {e}")
 
     except Exception as e:
         return intent_response("failed", f"Failed to find host: {e}", steps)
@@ -1124,22 +1142,43 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
     # Step 2: Execute deletion if not dry_run
     if not dry_run:
         deleted = []
+
+        # Phase 1: Delete manual DNS records FIRST (before host deletion)
+        # Skip dns_auto_managed — those are cleaned up automatically when the host is deleted
         for resource in resources_to_delete:
             res_type = resource.get("type", "")
             res_id = resource.get("id", "")
-            try:
-                if res_type == "ipam_host" and res_id:
-                    client.delete_ipam_host(res_id)
-                    deleted.append(resource)
-                    steps.append(step_result(f"Delete host {resource.get('name')}", "success"))
-                elif res_type.startswith("dns_") and res_id:
+            if res_type.startswith("dns_") and res_type != "dns_auto_managed" and res_id:
+                try:
                     client.delete_dns_record(res_id)
                     deleted.append(resource)
                     steps.append(step_result(f"Delete {res_type} {resource.get('name')}", "success"))
-            except Exception as e:
-                steps.append(step_result(f"Delete {res_type}", "failed", error=str(e)))
+                except Exception as e:
+                    err_str = str(e)
+                    if "404" in err_str or "not found" in err_str.lower():
+                        steps.append(step_result(f"Delete {res_type}", "skipped", error="Already deleted"))
+                    elif "forbidden" in err_str.lower() or "system" in err_str.lower():
+                        steps.append(
+                            step_result(f"Delete {res_type}", "skipped", error="System-managed record (auto-cleaned)")
+                        )
+                    else:
+                        warnings.append(f"Failed to delete {res_type}: {e}")
+                        steps.append(step_result(f"Delete {res_type}", "failed", error=err_str))
 
-        summary = f"Decommissioned: {len(deleted)}/{len(resources_to_delete)} resources deleted"
+        # Phase 2: Delete IPAM hosts (cascades auto-generated DNS + releases IPs)
+        for resource in resources_to_delete:
+            if resource.get("type") == "ipam_host" and resource.get("id"):
+                try:
+                    client.delete_ipam_host(resource["id"])
+                    deleted.append(resource)
+                    detail = f"Delete host {resource.get('name')}"
+                    if resource.get("auto_generate_records"):
+                        detail += " (DNS auto-cleaned)"
+                    steps.append(step_result(detail, "success"))
+                except Exception as e:
+                    steps.append(step_result(f"Delete host {resource.get('name')}", "failed", error=str(e)))
+
+        summary = f"Decommissioned: {len(deleted)}/{len([r for r in resources_to_delete if r['type'] not in ('ip_release', 'dns_auto_managed')])} resources deleted"
     else:
         summary = f"DRY RUN: Would delete {len(resources_to_delete)} resource(s)"
         steps.append(step_result("Dry run analysis", "success", {"resources": resources_to_delete}))
@@ -1162,7 +1201,7 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
-def diagnose_dns(domain: str, view: str | None = None) -> dict:
+def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False) -> dict:
     """
     Diagnose DNS resolution problems for a domain: checks zone, records, and security policies.
     USE THIS when a domain isn't resolving or has DNS issues.
@@ -1171,6 +1210,8 @@ def diagnose_dns(domain: str, view: str | None = None) -> dict:
     Args:
         domain: Domain name to diagnose (e.g., "web-prod-01.example.com" or "example.com")
         view: Optional DNS view name or ID. Required when a zone exists in multiple views (e.g., "default", "Azure.private-2")
+        flush_cache: If True, flushes the DNS cache for the domain before diagnosing.
+                     Useful when DNS changes aren't propagating. ASK the user before flushing.
 
     Returns:
         Diagnostic report with zone status, records found, and recommendations
@@ -1178,7 +1219,7 @@ def diagnose_dns(domain: str, view: str | None = None) -> dict:
     Examples:
         - diagnose_dns(domain="app.example.com") → checks zone, A/AAAA/CNAME records, security
         - diagnose_dns(domain="app.example.com", view="default") → checks in specific view
-        - diagnose_dns(domain="example.com") → checks zone apex records
+        - diagnose_dns(domain="app.example.com", flush_cache=True) → flushes cache then diagnoses
     """
     if not client:
         return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.")
@@ -1212,6 +1253,20 @@ def diagnose_dns(domain: str, view: str | None = None) -> dict:
         diagnostics["zone"] = {"status": "not_found"}
         diagnostics["issues"].append(z_err or f"DNS zone '{zone_part}' not found")
         steps.append(step_result("Check DNS zone", "failed", error=z_err or f"Zone '{zone_part}' not found"))
+
+    # Step 1b: Flush DNS cache if requested
+    if flush_cache:
+        try:
+            view_id = None
+            if view and zone_found:
+                # Use the view from zone resolution
+                view_id = diagnostics["zone"].get("id", "").split("/")[-1] if False else None
+            client.flush_dns_cache(domain, view_id=view_id)
+            steps.append(step_result("Flush DNS cache", "success", {"domain": domain}))
+        except Exception as e:
+            warnings_msg = f"Cache flush failed: {e}"
+            diagnostics.setdefault("warnings", []).append(warnings_msg)
+            steps.append(step_result("Flush DNS cache", "failed", error=str(e)))
 
     # Step 2: Check DNS records for this domain
     try:
@@ -1444,6 +1499,60 @@ def check_infrastructure_health() -> dict:
         steps.append(step_result("Check DNS views", "success", {"count": len(views)}))
     except Exception as e:
         steps.append(step_result("Check DNS views", "failed", error=str(e)))
+
+    # Check on-prem infrastructure hosts
+    try:
+        infra_hosts = extract_results(client.list_infra_hosts())
+        health["components"]["infra_hosts"] = {
+            "count": len(infra_hosts),
+            "status": "healthy" if infra_hosts else "no_infra_hosts",
+            "hosts": [
+                {
+                    "display_name": h.get("display_name", h.get("host_name", "")),
+                    "ip_address": h.get("ip_address", ""),
+                    "host_type": h.get("host_type", ""),
+                    "status": h.get("composite_status", ""),
+                }
+                for h in infra_hosts[:20]
+            ],
+        }
+        degraded = [h for h in infra_hosts if h.get("composite_status", "").lower() not in ("online", "success", "")]
+        if degraded:
+            health["issues"].append(
+                f"{len(degraded)} infrastructure host(s) not healthy: "
+                + ", ".join(h.get("display_name", "unknown") for h in degraded[:5])
+            )
+        steps.append(step_result("Check infra hosts", "success", {"count": len(infra_hosts)}))
+    except Exception as e:
+        steps.append(step_result("Check infra hosts", "failed", error=str(e)))
+
+    # Check infrastructure services
+    try:
+        infra_services = extract_results(client.list_infra_services())
+        health["components"]["infra_services"] = {
+            "count": len(infra_services),
+            "status": "healthy" if infra_services else "no_services",
+            "services": [
+                {
+                    "name": s.get("name", s.get("service_name", "")),
+                    "service_type": s.get("service_type", ""),
+                    "status": s.get("composite_status", ""),
+                    "host": s.get("host_display_name", ""),
+                }
+                for s in infra_services[:20]
+            ],
+        }
+        degraded_svc = [
+            s for s in infra_services if s.get("composite_status", "").lower() not in ("online", "success", "")
+        ]
+        if degraded_svc:
+            health["issues"].append(
+                f"{len(degraded_svc)} infrastructure service(s) not healthy: "
+                + ", ".join(s.get("name", "unknown") for s in degraded_svc[:5])
+            )
+        steps.append(step_result("Check infra services", "success", {"count": len(infra_services)}))
+    except Exception as e:
+        steps.append(step_result("Check infra services", "failed", error=str(e)))
 
     # Overall health
     failed_steps = sum(1 for s in steps if s["status"] == "failed")
@@ -2835,7 +2944,7 @@ def manage_ip_reservation(
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_security_policy(
     resource_type: Literal["policy", "named_list", "app_filter", "internal_domains", "access_code"],
-    action: Literal["create", "update", "delete", "list", "get"],
+    action: Literal["create", "update", "delete", "list", "get", "add_items", "remove_items"],
     name: str | None = None,
     resource_id: str | None = None,
     items: list[str] | None = None,
@@ -2851,14 +2960,16 @@ def manage_security_policy(
     Manage DNS security resources: policies (read-only), named lists, application filters, internal domains, and access codes.
     USE THIS for security policy CRUD. For posture assessment use assess_security_posture(). For threat investigation use investigate_threat().
 
-    NOTE: Security policies are read-only via API (list/get only). Named lists support full CRUD.
+    NOTE: Security policies are read-only via API (list/get only). Named lists support full CRUD + partial item updates.
 
     Args:
         resource_type: Type of security resource to manage
-        action: Operation to perform
+        action: Operation to perform. "add_items" and "remove_items" are for named_list only —
+                they add/remove domains from an existing list without replacing the entire list.
         name: Resource name
-        resource_id: Resource ID for get/update/delete
-        items: List of domains/IPs for named lists or internal domain lists
+        resource_id: Resource ID for get/update/delete/add_items/remove_items
+        items: List of domains/IPs for named lists or internal domain lists.
+               For "add_items": items to add. For "remove_items": items to remove.
         description: Description text
         list_type: Named list type (e.g., "custom_list") — for named_list create
         criteria: Application filter criteria — for app_filter create
@@ -2875,6 +2986,8 @@ def manage_security_policy(
         - manage_security_policy(resource_type="named_list", action="list")
         - manage_security_policy(resource_type="named_list", action="create", name="block-list", list_type="custom_list", items=["bad.com"])
         - manage_security_policy(resource_type="named_list", action="update", resource_id="...", items=["bad.com", "evil.com"])
+        - manage_security_policy(resource_type="named_list", action="add_items", resource_id="...", items=["new-bad.com"])
+        - manage_security_policy(resource_type="named_list", action="remove_items", resource_id="...", items=["old-entry.com"])
         - manage_security_policy(resource_type="internal_domains", action="create", name="corp-domains", items=["corp.local"])
     """
     if not atcfw_client:
@@ -2890,7 +3003,11 @@ def manage_security_policy(
     if resource_type == "policy" and action not in ("list", "get"):
         return intent_response("failed", "Security policies are read-only via API. Use 'list' or 'get' only.")
 
-    valid, err = validate_action(action, ["create", "update", "delete", "list", "get"])
+    # add_items/remove_items only for named_list
+    if action in ("add_items", "remove_items") and resource_type != "named_list":
+        return intent_response("failed", f"'{action}' is only supported for named_list, not {resource_type}.")
+
+    valid, err = validate_action(action, ["create", "update", "delete", "list", "get", "add_items", "remove_items"])
     if not valid:
         return intent_response("failed", err)
 
@@ -3012,6 +3129,21 @@ def manage_security_policy(
                 return intent_response(
                     "failed", "Update only supported for 'named_list'. Other types: recreate.", steps
                 )
+
+        elif action in ("add_items", "remove_items"):
+            if not resource_id:
+                return intent_response("failed", f"'{action}' requires 'resource_id'.", steps)
+            if not items:
+                return intent_response("failed", f"'{action}' requires 'items' list.", steps)
+            inserts = items if action == "add_items" else None
+            deletes = items if action == "remove_items" else None
+            resp = atcfw_client.partial_update_named_list_items(resource_id, inserts=inserts, deletes=deletes)
+            result = resp.get("result", resp)
+            verb = "Added" if action == "add_items" else "Removed"
+            steps.append(step_result(f"{verb} items from named list", "success", {"id": resource_id, "items": items}))
+            return intent_response(
+                "success", f"{verb} {len(items)} item(s) in named list {resource_id}", steps, result=result
+            )
 
         elif action == "delete":
             if not resource_id:

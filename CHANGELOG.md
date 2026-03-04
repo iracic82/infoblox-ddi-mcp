@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-03-04
+
+### Fixed
+
+- **Path-doubling bug** in `InfobloxClient`: 56 resource-specific methods (get/update/delete for all resource types) produced doubled URL paths like `/api/ddi/v1/ipam/host/ipam/host/uuid` when called with full-path IDs returned by the API — causing HTTP 501. Added `_resource_endpoint()` helper that normalizes both full-path IDs (`ipam/host/uuid`) and bare UUIDs.
+- **FQDN doubling** in `provision_host`: passing `hostname="web.example.com"` with `zone="example.com"` no longer produces `web.example.com.example.com`. The `host_names[].name` field now correctly sends the short hostname relative to the zone.
+- **Decommission of auto-DNS hosts**: `decommission_host` now detects `auto_generate_records` flag on IPAM hosts. For auto-managed DNS, skips separate DNS deletion (system records are auto-cleaned when the host is deleted). For manual DNS, deletes DNS records before the host. Handles 400/404 gracefully.
+
+### Added
+
+- `_resource_endpoint()` static helper on `InfobloxClient` — normalizes resource IDs to prevent path doubling across all 56 resource methods
+- `flush_dns_cache()` method on `InfobloxClient` — triggers DNS cache flush via `POST /api/ddi/v1/dns/cache_flush`
+- `list_infra_hosts()` and `list_infra_services()` methods on `InfobloxClient` — queries on-prem appliance health via `/api/infra/v1/detail_hosts` and `/api/infra/v1/detail_services`
+- `partial_update_named_list_items()` method on `AtcfwClient` — add/remove items from named lists without replacing the entire list (`PATCH /api/atcfw/v1/named_lists/{id}/items`)
+- `flush_cache` parameter on `diagnose_dns` tool — triggers DNS cache flush before diagnosis
+- `add_items` and `remove_items` actions on `manage_security_policy` tool — partial updates to named list items
+- Infrastructure host and service health checks in `check_infrastructure_health` tool — reports degraded on-prem appliances
+- 4 new tests for `_resource_endpoint` helper (129 total)
+
 ## [1.4.0] - 2026-03-04
 
 ### Added

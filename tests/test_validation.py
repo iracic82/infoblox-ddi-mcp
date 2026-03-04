@@ -157,3 +157,31 @@ class TestValidateFqdn:
         ok, msg = validate_fqdn("host!.example.com")
         assert ok is False
         assert "Invalid FQDN" in msg
+
+
+class TestResourceEndpoint:
+    """Tests for InfobloxClient._resource_endpoint path normalization."""
+
+    def test_bare_id_gets_prefix(self):
+        from services.infoblox_client import InfobloxClient
+
+        result = InfobloxClient._resource_endpoint("abc-123", "ipam/host")
+        assert result == "/api/ddi/v1/ipam/host/abc-123"
+
+    def test_full_id_not_doubled(self):
+        from services.infoblox_client import InfobloxClient
+
+        result = InfobloxClient._resource_endpoint("ipam/host/abc-123", "ipam/host")
+        assert result == "/api/ddi/v1/ipam/host/abc-123"
+
+    def test_federation_prefix(self):
+        from services.infoblox_client import InfobloxClient
+
+        result = InfobloxClient._resource_endpoint("federation/federated_block/xyz", "federation/federated_block")
+        assert result == "/api/ddi/v1/federation/federated_block/xyz"
+
+    def test_dns_record_prefix(self):
+        from services.infoblox_client import InfobloxClient
+
+        result = InfobloxClient._resource_endpoint("dns/record/abc", "dns/record")
+        assert result == "/api/ddi/v1/dns/record/abc"

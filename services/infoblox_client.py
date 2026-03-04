@@ -156,6 +156,18 @@ class InfobloxClient:
             timeout_read=self.timeout[1],
         )
 
+    @staticmethod
+    def _resource_endpoint(resource_id: str, resource_prefix: str) -> str:
+        """Build API endpoint for a specific resource, handling both full and short IDs.
+
+        The BloxOne DDI API returns resource IDs as full paths (e.g., "ipam/host/abc-123")
+        but our methods also accept bare IDs ("abc-123"). This normalizes both forms
+        to avoid path doubling like "/api/ddi/v1/ipam/host/ipam/host/abc-123".
+        """
+        if resource_id.startswith(resource_prefix):
+            return f"/api/ddi/v1/{resource_id}"
+        return f"/api/ddi/v1/{resource_prefix}/{resource_id}"
+
     def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
         """
         Make HTTP request to Infoblox API with circuit breaker protection
@@ -261,7 +273,7 @@ class InfobloxClient:
 
     def get_subnet(self, subnet_id: str) -> dict[str, Any]:
         """Get specific subnet by ID"""
-        return self._request("GET", f"/api/ddi/v1/ipam/subnet/{subnet_id}")
+        return self._request("GET", self._resource_endpoint(subnet_id, "ipam/subnet"))
 
     def create_subnet(self, address: str, space: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
         """
@@ -359,37 +371,37 @@ class InfobloxClient:
 
     def get_ipam_host(self, host_id: str) -> dict[str, Any]:
         """Get specific IPAM host by ID"""
-        return self._request("GET", f"/api/ddi/v1/ipam/host/{host_id}")
+        return self._request("GET", self._resource_endpoint(host_id, "ipam/host"))
 
     def update_ipam_host(self, host_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update IPAM host"""
-        return self._request("PATCH", f"/api/ddi/v1/ipam/host/{host_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(host_id, "ipam/host"), json=updates)
 
     def delete_ipam_host(self, host_id: str) -> dict[str, Any]:
         """Delete IPAM host (removes DNS and IP associations)"""
-        return self._request("DELETE", f"/api/ddi/v1/ipam/host/{host_id}")
+        return self._request("DELETE", self._resource_endpoint(host_id, "ipam/host"))
 
     # Fixed Address operations
     def get_fixed_address(self, address_id: str) -> dict[str, Any]:
         """Get specific fixed address by ID"""
-        return self._request("GET", f"/api/ddi/v1/ipam/fixed_address/{address_id}")
+        return self._request("GET", self._resource_endpoint(address_id, "ipam/fixed_address"))
 
     def update_fixed_address(self, address_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update fixed address"""
-        return self._request("PATCH", f"/api/ddi/v1/ipam/fixed_address/{address_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(address_id, "ipam/fixed_address"), json=updates)
 
     def delete_fixed_address(self, address_id: str) -> dict[str, Any]:
         """Delete fixed address (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/ipam/fixed_address/{address_id}")
+        return self._request("DELETE", self._resource_endpoint(address_id, "ipam/fixed_address"))
 
     # Subnet operations
     def update_subnet(self, subnet_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update subnet"""
-        return self._request("PATCH", f"/api/ddi/v1/ipam/subnet/{subnet_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(subnet_id, "ipam/subnet"), json=updates)
 
     def delete_subnet(self, subnet_id: str) -> dict[str, Any]:
         """Delete subnet (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/ipam/subnet/{subnet_id}")
+        return self._request("DELETE", self._resource_endpoint(subnet_id, "ipam/subnet"))
 
     # Range operations
     def list_ranges(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -414,15 +426,15 @@ class InfobloxClient:
 
     def get_range(self, range_id: str) -> dict[str, Any]:
         """Get specific range by ID"""
-        return self._request("GET", f"/api/ddi/v1/ipam/range/{range_id}")
+        return self._request("GET", self._resource_endpoint(range_id, "ipam/range"))
 
     def update_range(self, range_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update range"""
-        return self._request("PATCH", f"/api/ddi/v1/ipam/range/{range_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(range_id, "ipam/range"), json=updates)
 
     def delete_range(self, range_id: str) -> dict[str, Any]:
         """Delete range (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/ipam/range/{range_id}")
+        return self._request("DELETE", self._resource_endpoint(range_id, "ipam/range"))
 
     # Address Block operations
     @cached_method(address_block_cache)
@@ -451,15 +463,15 @@ class InfobloxClient:
 
     def get_address_block(self, block_id: str) -> dict[str, Any]:
         """Get specific address block by ID"""
-        return self._request("GET", f"/api/ddi/v1/ipam/address_block/{block_id}")
+        return self._request("GET", self._resource_endpoint(block_id, "ipam/address_block"))
 
     def update_address_block(self, block_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update address block"""
-        return self._request("PATCH", f"/api/ddi/v1/ipam/address_block/{block_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(block_id, "ipam/address_block"), json=updates)
 
     def delete_address_block(self, block_id: str) -> dict[str, Any]:
         """Delete address block (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/ipam/address_block/{block_id}")
+        return self._request("DELETE", self._resource_endpoint(block_id, "ipam/address_block"))
 
     # ==================== DHCP API Methods ====================
 
@@ -473,11 +485,11 @@ class InfobloxClient:
 
     def get_dhcp_host(self, host_id: str) -> dict[str, Any]:
         """Get specific DHCP host by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/host/{host_id}")
+        return self._request("GET", self._resource_endpoint(host_id, "dhcp/host"))
 
     def update_dhcp_host(self, host_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update DHCP host"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/host/{host_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(host_id, "dhcp/host"), json=updates)
 
     # Hardware operations
     def list_hardware(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -503,15 +515,15 @@ class InfobloxClient:
 
     def get_hardware(self, hardware_id: str) -> dict[str, Any]:
         """Get specific hardware by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/hardware/{hardware_id}")
+        return self._request("GET", self._resource_endpoint(hardware_id, "dhcp/hardware"))
 
     def update_hardware(self, hardware_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update hardware"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/hardware/{hardware_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(hardware_id, "dhcp/hardware"), json=updates)
 
     def delete_hardware(self, hardware_id: str) -> dict[str, Any]:
         """Delete hardware"""
-        return self._request("DELETE", f"/api/ddi/v1/dhcp/hardware/{hardware_id}")
+        return self._request("DELETE", self._resource_endpoint(hardware_id, "dhcp/hardware"))
 
     # HA Group operations
     def list_ha_groups(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -538,15 +550,15 @@ class InfobloxClient:
 
     def get_ha_group(self, group_id: str) -> dict[str, Any]:
         """Get specific HA group by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/ha_group/{group_id}")
+        return self._request("GET", self._resource_endpoint(group_id, "dhcp/ha_group"))
 
     def update_ha_group(self, group_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update HA group"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/ha_group/{group_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(group_id, "dhcp/ha_group"), json=updates)
 
     def delete_ha_group(self, group_id: str) -> dict[str, Any]:
         """Delete HA group"""
-        return self._request("DELETE", f"/api/ddi/v1/dhcp/ha_group/{group_id}")
+        return self._request("DELETE", self._resource_endpoint(group_id, "dhcp/ha_group"))
 
     # Option Code operations
     @cached_method(dhcp_option_cache)
@@ -578,15 +590,15 @@ class InfobloxClient:
 
     def get_option_code(self, code_id: str) -> dict[str, Any]:
         """Get specific option code by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/option_code/{code_id}")
+        return self._request("GET", self._resource_endpoint(code_id, "dhcp/option_code"))
 
     def update_option_code(self, code_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update option code"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/option_code/{code_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(code_id, "dhcp/option_code"), json=updates)
 
     def delete_option_code(self, code_id: str) -> dict[str, Any]:
         """Delete option code"""
-        return self._request("DELETE", f"/api/ddi/v1/dhcp/option_code/{code_id}")
+        return self._request("DELETE", self._resource_endpoint(code_id, "dhcp/option_code"))
 
     # Hardware Filter operations
     def list_hardware_filters(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -612,15 +624,15 @@ class InfobloxClient:
 
     def get_hardware_filter(self, filter_id: str) -> dict[str, Any]:
         """Get specific hardware filter by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/hardware_filter/{filter_id}")
+        return self._request("GET", self._resource_endpoint(filter_id, "dhcp/hardware_filter"))
 
     def update_hardware_filter(self, filter_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update hardware filter"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/hardware_filter/{filter_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(filter_id, "dhcp/hardware_filter"), json=updates)
 
     def delete_hardware_filter(self, filter_id: str) -> dict[str, Any]:
         """Delete hardware filter (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/dhcp/hardware_filter/{filter_id}")
+        return self._request("DELETE", self._resource_endpoint(filter_id, "dhcp/hardware_filter"))
 
     # Option Filter operations
     def list_option_filters(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -643,15 +655,15 @@ class InfobloxClient:
 
     def get_option_filter(self, filter_id: str) -> dict[str, Any]:
         """Get specific option filter by ID"""
-        return self._request("GET", f"/api/ddi/v1/dhcp/option_filter/{filter_id}")
+        return self._request("GET", self._resource_endpoint(filter_id, "dhcp/option_filter"))
 
     def update_option_filter(self, filter_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update option filter"""
-        return self._request("PATCH", f"/api/ddi/v1/dhcp/option_filter/{filter_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(filter_id, "dhcp/option_filter"), json=updates)
 
     def delete_option_filter(self, filter_id: str) -> dict[str, Any]:
         """Delete option filter (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/dhcp/option_filter/{filter_id}")
+        return self._request("DELETE", self._resource_endpoint(filter_id, "dhcp/option_filter"))
 
     # ==================== DNS Data API Methods ====================
 
@@ -665,7 +677,7 @@ class InfobloxClient:
 
     def get_dns_record(self, record_id: str) -> dict[str, Any]:
         """Get specific DNS record by ID"""
-        return self._request("GET", f"/api/ddi/v1/dns/record/{record_id}")
+        return self._request("GET", self._resource_endpoint(record_id, "dns/record"))
 
     def create_dns_record(
         self,
@@ -702,7 +714,7 @@ class InfobloxClient:
 
     def update_dns_record(self, record_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update DNS record"""
-        return self._request("PATCH", f"/api/ddi/v1/dns/record/{record_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(record_id, "dns/record"), json=updates)
 
     def delete_dns_record(self, record_id: str) -> dict[str, Any]:
         """Delete DNS record (moves to recycle bin)"""
@@ -958,6 +970,27 @@ class InfobloxClient:
 
         return self._request("GET", "/api/ddi/v1/dns/view", params=params)
 
+    def flush_dns_cache(self, fqdn: str, view_id: str | None = None) -> dict[str, Any]:
+        """Flush DNS cache for a specific domain.
+
+        Args:
+            fqdn: Domain name to flush (e.g., "example.com")
+            view_id: Optional DNS view ID to scope the flush
+        """
+        data = {"fqdn": fqdn}
+        if view_id:
+            data["view"] = view_id
+        return self._request("POST", "/api/ddi/v1/dns/cache_flush", json=data)
+
+    # Infrastructure Management API
+    def list_infra_hosts(self, limit: int = 100) -> dict[str, Any]:
+        """List on-prem infrastructure hosts (BloxOne appliances)."""
+        return self._request("GET", "/api/infra/v1/detail_hosts", params={"_limit": limit})
+
+    def list_infra_services(self, limit: int = 100) -> dict[str, Any]:
+        """List infrastructure services running on on-prem hosts."""
+        return self._request("GET", "/api/infra/v1/detail_services", params={"_limit": limit})
+
     # ==================== IPAM Federation API Methods ====================
 
     # Federated Realms
@@ -971,7 +1004,7 @@ class InfobloxClient:
 
     def get_federated_realm(self, realm_id: str) -> dict[str, Any]:
         """Get specific federated realm by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/federated_realm/{realm_id}")
+        return self._request("GET", self._resource_endpoint(realm_id, "federation/federated_realm"))
 
     def create_federated_realm(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
         """
@@ -987,11 +1020,11 @@ class InfobloxClient:
 
     def update_federated_realm(self, realm_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update federated realm"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/federated_realm/{realm_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(realm_id, "federation/federated_realm"), json=updates)
 
     def delete_federated_realm(self, realm_id: str) -> dict[str, Any]:
         """Delete federated realm"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/federated_realm/{realm_id}")
+        return self._request("DELETE", self._resource_endpoint(realm_id, "federation/federated_realm"))
 
     # Federated Blocks
     def list_federated_blocks(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -1004,7 +1037,7 @@ class InfobloxClient:
 
     def get_federated_block(self, block_id: str) -> dict[str, Any]:
         """Get specific federated block by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/federated_block/{block_id}")
+        return self._request("GET", self._resource_endpoint(block_id, "federation/federated_block"))
 
     def create_federated_block(
         self, address: str, federated_realm: str, comment: str | None = None, **kwargs
@@ -1023,11 +1056,11 @@ class InfobloxClient:
 
     def update_federated_block(self, block_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update federated block"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/federated_block/{block_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(block_id, "federation/federated_block"), json=updates)
 
     def delete_federated_block(self, block_id: str) -> dict[str, Any]:
         """Delete federated block"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/federated_block/{block_id}")
+        return self._request("DELETE", self._resource_endpoint(block_id, "federation/federated_block"))
 
     def allocate_next_available_federated_block(
         self, federated_block_id: str, cidr: int, comment: str | None = None, **kwargs
@@ -1044,7 +1077,7 @@ class InfobloxClient:
         data = {"cidr": cidr, "comment": comment, **kwargs}
         return self._request(
             "POST",
-            f"/api/ddi/v1/federation/federated_block/{federated_block_id}/next_available_federated_block",
+            f"{self._resource_endpoint(federated_block_id, 'federation/federated_block')}/next_available_federated_block",
             json=data,
         )
 
@@ -1059,7 +1092,7 @@ class InfobloxClient:
 
     def get_delegation(self, delegation_id: str) -> dict[str, Any]:
         """Get specific delegation by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/delegation/{delegation_id}")
+        return self._request("GET", self._resource_endpoint(delegation_id, "federation/delegation"))
 
     def create_delegation(
         self, address: str, federated_realm: str, delegated_to: str, comment: str | None = None, **kwargs
@@ -1085,11 +1118,11 @@ class InfobloxClient:
 
     def update_delegation(self, delegation_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update delegation"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/delegation/{delegation_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(delegation_id, "federation/delegation"), json=updates)
 
     def delete_delegation(self, delegation_id: str) -> dict[str, Any]:
         """Delete delegation"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/delegation/{delegation_id}")
+        return self._request("DELETE", self._resource_endpoint(delegation_id, "federation/delegation"))
 
     # Overlapping Blocks
     def list_overlapping_blocks(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -1102,7 +1135,7 @@ class InfobloxClient:
 
     def get_overlapping_block(self, block_id: str) -> dict[str, Any]:
         """Get specific overlapping block by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/overlapping_block/{block_id}")
+        return self._request("GET", self._resource_endpoint(block_id, "federation/overlapping_block"))
 
     def create_overlapping_block(
         self, address: str, federated_realm: str, comment: str | None = None, **kwargs
@@ -1121,11 +1154,11 @@ class InfobloxClient:
 
     def update_overlapping_block(self, block_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update overlapping block"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/overlapping_block/{block_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(block_id, "federation/overlapping_block"), json=updates)
 
     def delete_overlapping_block(self, block_id: str) -> dict[str, Any]:
         """Delete overlapping block"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/overlapping_block/{block_id}")
+        return self._request("DELETE", self._resource_endpoint(block_id, "federation/overlapping_block"))
 
     # Reserved Blocks
     def list_reserved_blocks(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -1138,7 +1171,7 @@ class InfobloxClient:
 
     def get_reserved_block(self, block_id: str) -> dict[str, Any]:
         """Get specific reserved block by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/reserved_block/{block_id}")
+        return self._request("GET", self._resource_endpoint(block_id, "federation/reserved_block"))
 
     def create_reserved_block(
         self, address: str, federated_realm: str, comment: str | None = None, **kwargs
@@ -1157,11 +1190,11 @@ class InfobloxClient:
 
     def update_reserved_block(self, block_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update reserved block"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/reserved_block/{block_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(block_id, "federation/reserved_block"), json=updates)
 
     def delete_reserved_block(self, block_id: str) -> dict[str, Any]:
         """Delete reserved block"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/reserved_block/{block_id}")
+        return self._request("DELETE", self._resource_endpoint(block_id, "federation/reserved_block"))
 
     # Forward-Looking Delegations
     def list_forward_delegations(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -1174,7 +1207,7 @@ class InfobloxClient:
 
     def get_forward_delegation(self, delegation_id: str) -> dict[str, Any]:
         """Get specific forward-looking delegation by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/forward_looking_delegation/{delegation_id}")
+        return self._request("GET", self._resource_endpoint(delegation_id, "federation/forward_looking_delegation"))
 
     def create_forward_delegation(
         self, address: str, federated_realm: str, delegated_to: str, comment: str | None = None, **kwargs
@@ -1201,12 +1234,12 @@ class InfobloxClient:
     def update_forward_delegation(self, delegation_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update forward-looking delegation"""
         return self._request(
-            "PATCH", f"/api/ddi/v1/federation/forward_looking_delegation/{delegation_id}", json=updates
+            "PATCH", self._resource_endpoint(delegation_id, "federation/forward_looking_delegation"), json=updates
         )
 
     def delete_forward_delegation(self, delegation_id: str) -> dict[str, Any]:
         """Delete forward-looking delegation"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/forward_looking_delegation/{delegation_id}")
+        return self._request("DELETE", self._resource_endpoint(delegation_id, "federation/forward_looking_delegation"))
 
     def preview_forward_delegation(self, data: dict[str, Any]) -> dict[str, Any]:
         """
@@ -1228,7 +1261,7 @@ class InfobloxClient:
 
     def get_federated_pool(self, pool_id: str) -> dict[str, Any]:
         """Get specific federated pool by ID"""
-        return self._request("GET", f"/api/ddi/v1/federation/federated_pool/{pool_id}")
+        return self._request("GET", self._resource_endpoint(pool_id, "federation/federated_pool"))
 
     def create_federated_pool(
         self, name: str, federated_realm: str, comment: str | None = None, **kwargs
@@ -1247,8 +1280,8 @@ class InfobloxClient:
 
     def update_federated_pool(self, pool_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update federated pool"""
-        return self._request("PATCH", f"/api/ddi/v1/federation/federated_pool/{pool_id}", json=updates)
+        return self._request("PATCH", self._resource_endpoint(pool_id, "federation/federated_pool"), json=updates)
 
     def delete_federated_pool(self, pool_id: str) -> dict[str, Any]:
         """Delete federated pool"""
-        return self._request("DELETE", f"/api/ddi/v1/federation/federated_pool/{pool_id}")
+        return self._request("DELETE", self._resource_endpoint(pool_id, "federation/federated_pool"))
