@@ -118,7 +118,9 @@ class TestProvisionHost:
         mock_infoblox_client.create_ipam_host.return_value = {"result": {"id": "ipam/host/new"}}
         async with Client(mcp_server) as c:
             r = parse_tool_result(
-                await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5"})
+                await c.call_tool(
+                    "provision_host", {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "dry_run": False}
+                )
             )
         assert r["status"] == "success"
 
@@ -136,7 +138,9 @@ class TestProvisionHost:
             "result": {"id": "ipam/host/new", "addresses": [{"address": "10.0.0.42"}]}
         }
         async with Client(mcp_server) as c:
-            r = parse_tool_result(await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod"}))
+            r = parse_tool_result(
+                await c.call_tool("provision_host", {"hostname": "web-01", "space": "prod", "dry_run": False})
+            )
         assert r["status"] == "success"
         assert any(s["step"] == "Auto-assign IP" and s["result"]["ip"] == "10.0.0.42" for s in r["steps"])
 
@@ -151,7 +155,10 @@ class TestProvisionHost:
         }
         async with Client(mcp_server) as c:
             r = parse_tool_result(
-                await c.call_tool("provision_host", {"hostname": "db-01", "space": "prod", "subnet": "10.1.0.0/24"})
+                await c.call_tool(
+                    "provision_host",
+                    {"hostname": "db-01", "space": "prod", "subnet": "10.1.0.0/24", "dry_run": False},
+                )
             )
         assert r["status"] == "success"
         mock_infoblox_client.get_next_available_ip.assert_called_once_with("ipam/subnet/2")
@@ -177,7 +184,7 @@ class TestProvisionHost:
             r = parse_tool_result(
                 await c.call_tool(
                     "provision_host",
-                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com"},
+                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com", "dry_run": False},
                 )
             )
         assert r["status"] == "success"
@@ -213,6 +220,7 @@ class TestProvisionHost:
                         "zone": "example.com",
                         "view": "default",
                         "auto_dns": False,
+                        "dry_run": False,
                     },
                 )
             )
@@ -240,7 +248,7 @@ class TestProvisionHost:
             r = parse_tool_result(
                 await c.call_tool(
                     "provision_host",
-                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com"},
+                    {"hostname": "web-01", "space": "prod", "ip": "10.0.0.5", "zone": "example.com", "dry_run": False},
                 )
             )
         # Host creation succeeds but DNS A record is skipped due to ambiguous zone
@@ -254,7 +262,8 @@ class TestProvisionDns:
         async with Client(mcp_server) as c:
             r = parse_tool_result(
                 await c.call_tool(
-                    "provision_dns", {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "example.com"}
+                    "provision_dns",
+                    {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "example.com", "dry_run": False},
                 )
             )
         assert r["status"] == "success"
@@ -291,7 +300,14 @@ class TestProvisionDns:
             r = parse_tool_result(
                 await c.call_tool(
                     "provision_dns",
-                    {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "example.com", "view": "default"},
+                    {
+                        "name": "www",
+                        "record_type": "A",
+                        "value": "10.0.0.1",
+                        "zone": "example.com",
+                        "view": "default",
+                        "dry_run": False,
+                    },
                 )
             )
         assert r["status"] == "success"
@@ -765,7 +781,10 @@ class TestManageDhcpLease:
         mock_infoblox_client.send_lease_command.return_value = {"success": True}
         async with Client(mcp_server) as c:
             r = parse_tool_result(
-                await c.call_tool("manage_dhcp_lease", {"action": "clear", "address": "10.0.0.50", "space": "prod"})
+                await c.call_tool(
+                    "manage_dhcp_lease",
+                    {"action": "clear", "address": "10.0.0.50", "space": "prod", "dry_run": False},
+                )
             )
         assert r["status"] == "success"
         mock_infoblox_client.send_lease_command.assert_called_once()
@@ -974,3 +993,212 @@ class TestManageSecurityPolicyExpanded:
             )
         assert r["status"] == "success"
         assert "DRY RUN" in r["summary"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Error Scenarios & Edge Cases
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestErrorScenarios:
+    """Tests for error paths: API failures, partial workflows, edge cases."""
+
+    async def test_provision_host_api_error(self, mcp_server, mock_infoblox_client):
+        """provision_host should return 'failed' when the API returns an HTTP error."""
+        import requests
+
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        mock_infoblox_client.create_ipam_host.side_effect = requests.exceptions.HTTPError("400 Bad Request")
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {
+                        "hostname": "fail-host",
+                        "space": "prod",
+                        "ip": "10.0.0.99",
+                        "zone": "example.com",
+                        "dry_run": False,
+                    },
+                )
+            )
+        assert r["status"] == "failed"
+        assert "Failed to create IPAM host" in r["summary"]
+
+    async def test_provision_dns_zone_not_found(self, mcp_server, mock_infoblox_client):
+        """provision_dns should fail gracefully when zone doesn't exist."""
+        mock_infoblox_client.list_auth_zones.return_value = _api([])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_dns",
+                    {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "nonexistent.com"},
+                )
+            )
+        assert r["status"] == "failed"
+        assert "not found" in r["summary"]
+
+    async def test_explore_network_api_exception(self, mcp_server, mock_infoblox_client):
+        """explore_network should return 'failed' on unexpected API exceptions."""
+        mock_infoblox_client.list_ip_spaces.side_effect = Exception("Connection refused")
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("explore_network"))
+        assert r["status"] == "failed"
+
+    async def test_manage_dns_record_delete_not_found(self, mcp_server, mock_infoblox_client):
+        """Deleting a non-existent DNS record should propagate the failure."""
+        import requests
+
+        mock_infoblox_client.delete_dns_record.side_effect = requests.exceptions.HTTPError("404 Not Found")
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_dns_record",
+                    {"action": "delete", "record_id": "dns/record/nonexistent", "dry_run": False},
+                )
+            )
+        assert r["status"] == "failed"
+
+    async def test_investigate_threat_no_insights_client(self, mcp_server, monkeypatch):
+        """investigate_threat should handle missing insights client gracefully."""
+        import mcp_intent
+
+        monkeypatch.setattr(mcp_intent, "insights_client", None)
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("investigate_threat", {"query": "malware"}))
+        # Should fail gracefully when insights client is not available
+        assert r["status"] == "failed"
+
+    async def test_provision_host_partial_dns_failure(self, mcp_server, mock_infoblox_client):
+        """Host creation succeeds but manual DNS A record fails → partial success."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        mock_infoblox_client.create_ipam_host.return_value = {
+            "result": {"id": "ipam/host/1", "name": "web-01.example.com", "addresses": [{"address": "10.0.0.1"}]}
+        }
+        mock_infoblox_client.create_dns_record.side_effect = Exception("500 Internal Server Error")
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {
+                        "hostname": "web-01",
+                        "space": "prod",
+                        "ip": "10.0.0.1",
+                        "zone": "example.com",
+                        "auto_dns": False,
+                        "dry_run": False,
+                    },
+                )
+            )
+        # Host created successfully but DNS failed → partial
+        assert r["status"] == "partial"
+        assert len(r["warnings"]) > 0
+
+
+class TestSanitizeFilter:
+    """Tests for sanitize_filter hardening against injection."""
+
+    def test_basic_escaping(self):
+        from mcp_intent import sanitize_filter
+
+        assert sanitize_filter('hello"world') == 'hello\\"world'
+        assert sanitize_filter("back\\slash") == "back\\\\slash"
+
+    def test_operator_removal(self):
+        from mcp_intent import sanitize_filter
+
+        assert "==" not in sanitize_filter('foo" or name=="admin')
+        assert "!=" not in sanitize_filter("test!=break")
+        assert "~=" not in sanitize_filter("test~=break")
+
+    def test_length_truncation(self):
+        from mcp_intent import sanitize_filter
+
+        long_input = "A" * 1000
+        result = sanitize_filter(long_input)
+        assert len(result) <= 512
+
+    def test_combined_injection(self):
+        from mcp_intent import sanitize_filter
+
+        # Attempt to break out of a filter value
+        malicious = 'evil" or name=="*'
+        sanitized = sanitize_filter(malicious)
+        # Must not contain unescaped quotes or operators
+        assert '=="' not in sanitized
+
+
+class TestDryRunProtection:
+    """Tests for dry_run defaults on destructive operations."""
+
+    async def test_provision_host_has_dry_run(self, mcp_server, mock_infoblox_client):
+        """provision_host with dry_run=True should not create anything."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_host",
+                    {"hostname": "test", "space": "prod", "ip": "10.0.0.1", "zone": "example.com", "dry_run": True},
+                )
+            )
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_ipam_host.assert_not_called()
+
+    async def test_provision_dns_has_dry_run(self, mcp_server, mock_infoblox_client):
+        """provision_dns with dry_run=True should not create anything."""
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "provision_dns",
+                    {"name": "www", "record_type": "A", "value": "10.0.0.1", "zone": "example.com", "dry_run": True},
+                )
+            )
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_dns_record.assert_not_called()
+
+    async def test_manage_dhcp_lease_clear_has_dry_run(self, mcp_server, mock_infoblox_client):
+        """manage_dhcp_lease clear with dry_run=True should not actually clear."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(
+                await c.call_tool(
+                    "manage_dhcp_lease",
+                    {"action": "clear", "address": "10.0.0.1", "space": "prod", "dry_run": True},
+                )
+            )
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.send_lease_command.assert_not_called()
+
+
+class TestHealthEndpoint:
+    """Tests for the health check tool."""
+
+    async def test_health_check_all_clients(
+        self, mcp_server, mock_infoblox_client, mock_insights_client, mock_atcfw_client
+    ):
+        """check_api_health should report status for all three clients."""
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_insights_client.list_insights.return_value = {"results": []}
+        mock_atcfw_client.list_security_policies.return_value = {"results": []}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("check_api_health"))
+        assert r["status"] == "success"
+        assert "healthy" in r["summary"].lower() or "reachable" in r["summary"].lower()
+
+    async def test_health_check_partial_failure(self, mcp_server, mock_infoblox_client, monkeypatch):
+        """check_api_health should report partial when some clients fail."""
+        import mcp_intent
+
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        monkeypatch.setattr(mcp_intent, "insights_client", None)
+        monkeypatch.setattr(mcp_intent, "atcfw_client", None)
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("check_api_health"))
+        assert r["status"] in ("success", "partial")

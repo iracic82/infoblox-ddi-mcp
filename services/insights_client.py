@@ -8,13 +8,53 @@ API Documentation: https://csp.infoblox.com/apidoc/docs/Insights
 """
 
 import os
+import time
 from typing import Any
 
+import pybreaker
 import requests
 import structlog
 
+from services import metrics
+
 # Initialize structured logger
 logger = structlog.get_logger(__name__)
+
+# Transient HTTP status codes excluded from circuit breaker failure counting
+TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
+
+
+class TransientHTTPError(requests.exceptions.HTTPError):
+    """Transient HTTP errors excluded from circuit breaker."""
+
+    pass
+
+
+# Circuit Breaker for Insights API
+class InsightsCircuitBreakerListener(pybreaker.CircuitBreakerListener):
+    """Logs circuit breaker state changes for Insights API"""
+
+    def state_change(self, cb, old_state, new_state):
+        new_state_str = str(new_state).split(".")[-1].replace("State object", "").strip()
+        logger.warning(
+            "circuit_breaker_state_change",
+            name=cb.name,
+            old_state=str(old_state),
+            new_state=str(new_state),
+            fail_counter=cb.fail_counter,
+        )
+        metrics.set_circuit_state(cb.name, new_state_str)
+        if "Open" in str(new_state):
+            metrics.record_circuit_breaker_open(cb.name)
+
+
+insights_breaker = pybreaker.CircuitBreaker(
+    fail_max=5,
+    reset_timeout=60,
+    exclude=[requests.exceptions.Timeout, TransientHTTPError],
+    listeners=[InsightsCircuitBreakerListener()],
+    name="insights_api",
+)
 
 
 class InsightsClient:
@@ -49,24 +89,57 @@ class InsightsClient:
         )
 
     def _request(self, method: str, endpoint: str, **kwargs) -> dict[str, Any]:
-        """Make an HTTP request to the Insights API."""
+        """Make HTTP request with circuit breaker protection and metrics."""
         url = f"{self.base_url}/api/insights/v1{endpoint}"
+        start_time = time.time()
+        status_code = None
+        error = None
 
-        # Add timeout if not already specified
-        if "timeout" not in kwargs:
-            kwargs["timeout"] = self.timeout
+        @insights_breaker
+        def _make_request():
+            if "timeout" not in kwargs:
+                kwargs["timeout"] = self.timeout
+            response = self.session.request(method, url, **kwargs)
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if response.status_code in TRANSIENT_STATUS_CODES:
+                    raise TransientHTTPError(str(e), response=response) from e
+                raise
+            return response
 
         try:
-            response = self.session.request(method, url, **kwargs)
-            response.raise_for_status()
+            response = _make_request()
+            status_code = response.status_code
+            duration_ms = (time.time() - start_time) * 1000
+            metrics.record_api_call("insights_client", endpoint, duration_ms, status_code)
             return response.json() if response.text else {}
-        except requests.exceptions.RequestException as e:
+
+        except pybreaker.CircuitBreakerError as e:
+            duration_ms = (time.time() - start_time) * 1000
+            error = "CircuitBreakerOpen"
+            metrics.record_api_call("insights_client", endpoint, duration_ms, 503, error)
             logger.error(
-                "insights_api_request_failed",
-                endpoint=endpoint,
-                error=str(e),
-                status_code=getattr(e.response, "status_code", None),
+                "circuit_breaker_open", message="Insights API circuit breaker is OPEN", breaker_name="insights_api"
             )
+            raise Exception(
+                "Insights API is currently unavailable (circuit breaker open). "
+                "The service will automatically retry in 60 seconds."
+            ) from e
+
+        except requests.exceptions.HTTPError as e:
+            duration_ms = (time.time() - start_time) * 1000
+            status_code = response.status_code if "response" in locals() else 500
+            error = f"HTTPError_{status_code}"
+            metrics.record_api_call("insights_client", endpoint, duration_ms, status_code, error)
+            logger.error("api_request_failed", endpoint=endpoint, status_code=status_code, error=str(e))
+            raise
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            error = type(e).__name__
+            metrics.record_api_call("insights_client", endpoint, duration_ms, 500, error)
+            logger.error("api_request_error", endpoint=endpoint, error_type=type(e).__name__, error=str(e))
             raise
 
     # ============================================================

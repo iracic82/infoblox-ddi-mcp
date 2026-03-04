@@ -27,6 +27,15 @@ logger = structlog.get_logger(__name__)
 security_policy_cache = TTLCache(maxsize=500, ttl=300)  # 5 minutes
 named_list_cache = TTLCache(maxsize=1000, ttl=300)
 
+# Transient HTTP status codes excluded from circuit breaker failure counting
+TRANSIENT_STATUS_CODES = {429, 502, 503, 504}
+
+
+class TransientHTTPError(requests.exceptions.HTTPError):
+    """Transient HTTP errors excluded from circuit breaker."""
+
+    pass
+
 
 # Circuit Breaker for Atcfw API
 class AtcfwCircuitBreakerListener(pybreaker.CircuitBreakerListener):
@@ -53,7 +62,7 @@ class AtcfwCircuitBreakerListener(pybreaker.CircuitBreakerListener):
 atcfw_breaker = pybreaker.CircuitBreaker(
     fail_max=5,
     reset_timeout=60,
-    exclude=[requests.exceptions.Timeout],
+    exclude=[requests.exceptions.Timeout, TransientHTTPError],
     listeners=[AtcfwCircuitBreakerListener()],
     name="atcfw_api",
 )
@@ -131,7 +140,12 @@ class AtcfwClient:
         @atcfw_breaker
         def _make_request():
             response = self.session.request(method, url, **kwargs)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if response.status_code in TRANSIENT_STATUS_CODES:
+                    raise TransientHTTPError(str(e), response=response) from e
+                raise
             return response
 
         try:
@@ -234,17 +248,22 @@ class AtcfwClient:
         url = f"{self.base_url}/api/atcfw/v1/named_lists"
         payload = {"name": name, "type": type, "description": description, "items": items or [], "tags": tags or {}}
 
-        return self._request("POST", url, json=payload, timeout=self.timeout)
+        result = self._request("POST", url, json=payload, timeout=self.timeout)
+        named_list_cache.clear()
+        return result
 
     def update_named_list(self, list_id: str, **kwargs) -> dict[str, Any]:
         """Update a named list"""
         url = f"{self.base_url}/api/atcfw/v1/named_lists/{list_id}"
-        return self._request("PUT", url, json=kwargs, timeout=self.timeout)
+        result = self._request("PUT", url, json=kwargs, timeout=self.timeout)
+        named_list_cache.clear()
+        return result
 
     def delete_named_list(self, list_id: str) -> dict[str, Any]:
         """Delete a named list"""
         url = f"{self.base_url}/api/atcfw/v1/named_lists/{list_id}"
         self._request("DELETE", url, timeout=self.timeout)
+        named_list_cache.clear()
         return {"status": "deleted", "id": list_id}
 
     def partial_update_named_list_items(
