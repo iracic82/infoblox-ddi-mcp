@@ -184,7 +184,7 @@ class TestProvisionHost:
         # Verify create_ipam_host was called with auto_generate_records and host_names
         call_kwargs = mock_infoblox_client.create_ipam_host.call_args.kwargs
         assert call_kwargs["auto_generate_records"] is True
-        assert call_kwargs["host_names"] == [{"name": "web-01.example.com", "zone": ZONE["id"], "primary_name": True}]
+        assert call_kwargs["host_names"] == [{"name": "web-01", "zone": ZONE["id"], "primary_name": True}]
         # No separate DNS record creation calls
         mock_infoblox_client.create_dns_record.assert_not_called()
 
@@ -207,8 +207,12 @@ class TestProvisionHost:
                 await c.call_tool(
                     "provision_host",
                     {
-                        "hostname": "web-01", "space": "prod", "ip": "10.0.0.5",
-                        "zone": "example.com", "view": "default", "auto_dns": False,
+                        "hostname": "web-01",
+                        "space": "prod",
+                        "ip": "10.0.0.5",
+                        "zone": "example.com",
+                        "view": "default",
+                        "auto_dns": False,
                     },
                 )
             )

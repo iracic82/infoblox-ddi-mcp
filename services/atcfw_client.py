@@ -247,6 +247,24 @@ class AtcfwClient:
         self._request("DELETE", url, timeout=self.timeout)
         return {"status": "deleted", "id": list_id}
 
+    def partial_update_named_list_items(
+        self, list_id: str, inserts: list[str] | None = None, deletes: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Add or remove items from a named list without replacing the entire list.
+
+        Args:
+            list_id: Named list ID
+            inserts: Items to add (domains/IPs)
+            deletes: Items to remove (domains/IPs)
+        """
+        url = f"{self.base_url}/api/atcfw/v1/named_lists/{list_id}/items"
+        data = {}
+        if inserts:
+            data["inserts_items"] = inserts
+        if deletes:
+            data["deletes_items"] = deletes
+        return self._request("PATCH", url, json=data, timeout=self.timeout)
+
     # ==================== Application Filters ====================
 
     def list_application_filters(self, filter_expr: str | None = None, limit: int = 100) -> dict[str, Any]:
