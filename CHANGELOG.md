@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-03-04
+
+### Fixed
+
+- DNS record creation (A, PTR) no longer passes redundant `view` parameter to the API — the view-specific zone ID is sufficient and passing both caused field validation errors in multi-view environments
+
+## [1.3.0] - 2026-03-04
+
+### Added
+
+- `resolve_view()` helper for DNS view name-to-ID resolution (exact match, fuzzy fallback, ID passthrough)
+- `view` parameter on `provision_host`, `provision_dns`, `diagnose_dns`, `manage_dns_record`, and `manage_dns_zone` for multi-view zone disambiguation
+- Shared `create_resilient_session()` factory in `services/__init__.py` with retry (3 attempts, exponential backoff on 429/502/503/504) and connection pooling (20 connections, 10 per host)
+- 13 new tests (121 total): 6 for `resolve_view`, 4 for `resolve_zone` view behavior, 3 tool-level view tests
+
+### Fixed
+
+- 3 missing `sanitize_filter()` calls in trailing-dot zone fallbacks (filter injection risk)
+- 10 bare `except: pass` blocks replaced with proper warning capture
+- All AtcfwClient methods now route through `_request()` for circuit breaker protection (previously 11 methods bypassed it)
+- `InsightsClient._request()` raises exceptions instead of silently returning `{"error": ...}` dicts
+- `assess_security_posture` fails fast when no clients available instead of returning vacuous success
+- Metrics percentile `IndexError` on boundary conditions
+- `resolve_zone()` no longer silently picks `zones[0]` when multiple views match — returns disambiguation error listing available views
+
+### Changed
+
+- `resolve_zone()` accepts optional `view` parameter to filter by DNS view
+- `provision_host` refactored to use `resolve_zone()` instead of inline `list_auth_zones` + `zones[0]`
+- `investigate_threat` limit capped at 100, `manage_dns_record` limit capped at 500
+- All 3 service clients (`InfobloxClient`, `InsightsClient`, `AtcfwClient`) use shared resilient session factory
+
 ## [1.2.0] - 2026-02-22
 
 ### Added
