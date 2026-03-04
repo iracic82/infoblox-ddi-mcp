@@ -147,9 +147,11 @@ class TestProvisionHost:
                 )
             )
         assert r["status"] == "success"
-        # Verify the A record create_dns_record call used the correct zone (first call, not PTR)
+        # Verify the A record create_dns_record call used the correct view-specific zone ID
         a_record_call = mock_infoblox_client.create_dns_record.call_args_list[0]
         assert a_record_call.kwargs.get("zone") == "dns/auth_zone/default"
+        # View should NOT be passed — the zone ID is already view-specific
+        assert a_record_call.kwargs.get("view") is None
 
     async def test_ambiguous_zone_no_view(self, mcp_server, mock_infoblox_client):
         """provision_host with zone in multiple views and no view specified → warns about ambiguity."""
