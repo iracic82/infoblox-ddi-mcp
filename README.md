@@ -506,18 +506,7 @@ All MCP tool calls are auto-traced with service name `infoblox-ddi-mcp`. Works w
 
 For production environments, run the MCP server behind an API gateway for TLS termination, rate limiting, and centralized authentication.
 
-```
-                        ┌─────────────────────┐
-  AI Agents             │   API Gateway        │        MCP Server
-  (Claude, AEX,  ──────▶│   (Kong / AWS API    │──────▶  infoblox-ddi-mcp
-   LangChain)    HTTPS  │    GW / Nginx / F5)  │ HTTP    :4005/mcp
-                        │                     │
-                        │  • TLS termination   │
-                        │  • Rate limiting     │
-                        │  • Auth (OAuth/JWT)  │
-                        │  • Access logging    │
-                        └─────────────────────┘
-```
+![Production Deployment](docs/deployment.png)
 
 The MCP server runs plain HTTP internally. The gateway handles TLS and external auth. Set `MCP_AUTH_TOKEN` as a shared secret between the gateway and the server for an additional layer of security.
 
@@ -675,42 +664,7 @@ make clean          Remove build artifacts
 
 ## Architecture
 
-```
-Your AI Agent (Claude, GPT, AEX, Cursor, LangChain, ...)
-        │
-        │  MCP Protocol (stdio or HTTP)
-        ▼
-┌────────────────────────────────────┐
-│  mcp_intent.py                     │  ← This server (23 intent tools)
-│  Validation · Resolvers            │
-│  Multi-step orchestration          │
-│  Auto-IP · Auto-DNS · Dry-run     │
-└──────────┬─────────────────────────┘
-           │  Direct Python calls
-           ▼
-┌────────────────────────────────────┐
-│  Service Clients                    │
-│  ├─ InfobloxClient (90 ops)        │  ← IPAM, DNS, DHCP, Federation,
-│  │   + Infra hosts & services      │     Infrastructure Management
-│  ├─ InsightsClient (13 ops)        │  ← SOC Insights, Policy Analytics
-│  └─ AtcfwClient (12 ops)           │  ← DNS Security, Threat Lists
-│                                     │
-│  Circuit breakers · Caching         │
-│  Connection pooling · Metrics       │
-│  Resource ID normalization          │
-└──────────┬─────────────────────────┘
-           │  HTTPS (REST API)
-           ▼
-┌────────────────────────────────────┐
-│  Infoblox CSP Portal                │
-│  Universal DDI APIs                   │
-│  ├─ /api/ddi/v1    (DDI)           │
-│  ├─ /api/atcfw/v1  (Security)      │
-│  ├─ /api/infra/v1  (Infra Health)  │
-│  └─ /api/v2        (Insights)      │
-│  Your tenant · Your API key         │
-└────────────────────────────────────┘
-```
+![Architecture](docs/architecture.png)
 
 ---
 
