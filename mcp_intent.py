@@ -334,7 +334,9 @@ def resolve_realm(realm_name: str) -> tuple:
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
-def explore_network(scope: str | None = None, depth: Literal["summary", "blocks", "full"] = "summary", limit: int = 500) -> dict:
+def explore_network(
+    scope: str | None = None, depth: Literal["summary", "blocks", "full"] = "summary", limit: int = 500
+) -> dict:
     """
     Browse the IP hierarchy tree (Spaces → Blocks → Subnets) with utilization data.
     USE THIS to navigate and drill into network structure.
@@ -354,7 +356,14 @@ def explore_network(scope: str | None = None, depth: Literal["summary", "blocks"
         - explore_network(depth="full") → complete hierarchy with all subnets
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     warnings = []
@@ -387,7 +396,9 @@ def explore_network(scope: str | None = None, depth: Literal["summary", "blocks"
                 blocks_resp = client.list_address_blocks(filter=f'space=="{space_id}"' if space_id else None)
                 blocks = extract_results(blocks_resp)
                 if len(blocks) > limit:
-                    warnings.append(f"Showing {limit} of {len(blocks)} address blocks for {space_info['name']}. Use scope= to narrow.")
+                    warnings.append(
+                        f"Showing {limit} of {len(blocks)} address blocks for {space_info['name']}. Use scope= to narrow."
+                    )
                     blocks = blocks[:limit]
                 space_info["address_blocks"] = [
                     {
@@ -412,7 +423,9 @@ def explore_network(scope: str | None = None, depth: Literal["summary", "blocks"
                 subnets_resp = client.list_subnets(filter=f'space=="{space_id}"' if space_id else None)
                 subnets = extract_results(subnets_resp)
                 if len(subnets) > limit:
-                    warnings.append(f"Showing {limit} of {len(subnets)} subnets for {space_info['name']}. Use scope= to narrow.")
+                    warnings.append(
+                        f"Showing {limit} of {len(subnets)} subnets for {space_info['name']}. Use scope= to narrow."
+                    )
                     subnets = subnets[:limit]
                 space_info["subnets"] = [
                     {
@@ -478,7 +491,14 @@ def search_infrastructure(
         - search_infrastructure(query="example.com", types=["dns_records"])
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     search_types = types or ["subnets", "dns_zones", "dns_records", "hosts", "addresses"]
     limit = min(limit, 100)
@@ -625,7 +645,14 @@ def get_network_summary(scope: str | None = None) -> dict:
         - get_network_summary(scope="production") → production space only
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     summary_data = {}
@@ -745,7 +772,14 @@ def provision_host(
         - provision_host(hostname="db-replica-02", space="corp", subnet="10.10.20.0/24", dry_run=False)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     warnings = []
@@ -1011,7 +1045,14 @@ def provision_dns(
         - provision_dns(name="app.example.com", record_type="CNAME", value="lb.example.com", dry_run=False)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
 
@@ -1153,7 +1194,14 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
         - decommission_host(identifier="10.20.3.50") → finds and decommissions host at this IP
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     warnings = []
@@ -1309,7 +1357,14 @@ def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False
         - diagnose_dns(domain="app.example.com", flush_cache=True) → flushes cache then diagnoses
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     diagnostics = {"domain": domain, "issues": [], "records": []}
@@ -1437,7 +1492,14 @@ def diagnose_ip_conflict(address: str) -> dict:
         - diagnose_ip_conflict(address="192.168.1.1") → checks subnet membership and reservations
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     diagnostics = {"address": address, "conflicts": [], "found_in": []}
@@ -1613,7 +1675,14 @@ def check_infrastructure_health() -> dict:
         - check_infrastructure_health() → full health check of all DDI components
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     health = {"components": {}, "issues": []}
@@ -1774,7 +1843,14 @@ def investigate_threat(
         - investigate_threat(query="malware") → malware-related insights
     """
     if not insights_client:
-        return intent_response("failed", "Insights client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Insights client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     warnings = []
@@ -1986,7 +2062,14 @@ def get_ip_utilization(scope: str | None = None) -> dict:
         - get_ip_utilization(scope="production") → production space only
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     steps = []
     warnings = []
@@ -2114,7 +2197,14 @@ def manage_network(
         - manage_network(resource_type="address_block", action="next_available_address_block", resource_id="ipam/address_block/xyz", cidr=20)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(resource_type, ["ip_space", "address_block", "subnet", "range"])
     if not valid:
@@ -2446,7 +2536,14 @@ def manage_dns_zone(
         - manage_dns_zone(action="delete", fqdn="old.example.com", dry_run=False)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(resource_type, ["auth_zone", "forward_zone", "dns_view", "rpz", "delegation"])
     if not valid:
@@ -2803,7 +2900,14 @@ def manage_dns_record(
         - manage_dns_record(action="delete", name="old-host", zone="example.com", record_type="A", dry_run=False)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_action(action, ["update", "delete", "list", "get"])
     if not valid:
@@ -2980,7 +3084,14 @@ def manage_dhcp(
         - manage_dhcp(resource_type="option_code", action="delete", resource_id="dhcp/option_code/123", dry_run=False)
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(
         resource_type, ["ha_group", "option_code", "hardware_filter", "option_filter", "hardware"]
@@ -3185,7 +3296,14 @@ def manage_dhcp_lease(
         - manage_dhcp_lease(action="resend_ddns", address="10.0.0.50", space="prod")
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_action(action, ["list", "get", "clear", "resend_ddns"])
     if not valid:
@@ -3308,7 +3426,14 @@ def manage_ip_reservation(
         - manage_ip_reservation(action="update", resource_id="ipam/fixed_address/abc", comment="Updated")
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_action(action, ["reserve", "release", "list", "get", "update"])
     if not valid:
@@ -3525,7 +3650,14 @@ def manage_security_policy(
         - manage_security_policy(resource_type="internal_domains", action="create", name="corp-domains", items=["corp.local"])
     """
     if not atcfw_client:
-        return intent_response("failed", "Security client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Security client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(
         resource_type, ["policy", "named_list", "app_filter", "internal_domains", "access_code", "category_filter"]
@@ -3795,7 +3927,14 @@ def manage_federation(
         - manage_federation(resource_type="delegation", action="create", address="10.1.0.0/16", realm="us-east", delegated_to="team-a")
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(
         resource_type,
@@ -4037,7 +4176,14 @@ def manage_dtc(
         - manage_dtc(resource_type="policy", action="list") → all DTC policies
     """
     if not client:
-        return intent_response("failed", "Infoblox client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_resource_type(resource_type, ["lbdn", "pool", "server", "policy"])
     if not valid:
@@ -4199,7 +4345,14 @@ def triage_security_insight(
         - triage_security_insight(action="bulk_triage", insight_ids=["id1", "id2"], status="FALSE_POSITIVE", dry_run=False)
     """
     if not insights_client:
-        return intent_response("failed", "Insights client not initialized. Check INFOBLOX_API_KEY.", next_actions=["Run check_api_health() to verify connectivity", "Ensure INFOBLOX_API_KEY is set in environment or .env file"])
+        return intent_response(
+            "failed",
+            "Insights client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
 
     valid, err = validate_action(action, ["update_status", "bulk_triage", "get_history"])
     if not valid:
@@ -4344,7 +4497,12 @@ def resource_tool_catalog() -> str:
                     "description": "Create and remove hosts with automatic DNS and IP management",
                 },
                 "troubleshooting": {
-                    "tools": ["diagnose_dns", "diagnose_ip_conflict", "check_api_health", "check_infrastructure_health"],
+                    "tools": [
+                        "diagnose_dns",
+                        "diagnose_ip_conflict",
+                        "check_api_health",
+                        "check_infrastructure_health",
+                    ],
                     "description": "Diagnose DNS, IP, API connectivity, and infrastructure issues",
                 },
                 "security": {
