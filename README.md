@@ -335,6 +335,7 @@ curl -X POST http://127.0.0.1:4005/mcp \
 |------|-------------|
 | `diagnose_dns` | Diagnose DNS resolution problems: zone, records, security policies, and optional cache flush |
 | `diagnose_ip_conflict` | Detect overlapping subnets, duplicate reservations, DHCP usage, and host associations |
+| `check_api_health` | Verify Infoblox API connectivity for all three service clients (DDI, Insights, ATCFW) with response latency |
 | `check_infrastructure_health` | HA groups, DHCP hosts, DNS zones, DNS views, IP spaces, on-prem appliance and service health |
 
 ### Security (Read + Write)
@@ -365,6 +366,13 @@ curl -X POST http://127.0.0.1:4005/mcp \
 | Tool | Description |
 |------|-------------|
 | `manage_dhcp` | CRUD for HA groups, option codes, hardware/option filters, hardware entries |
+| `manage_dhcp_lease` | List/search active leases, clear (wipe) leases, or resend DDNS updates |
+
+### DNS Traffic Control (CRUD)
+
+| Tool | Description |
+|------|-------------|
+| `manage_dtc` | Manage DTC/GSLB: LBDNs, pools, servers, and policies for global server load balancing and traffic steering |
 
 ### Federation (CRUD)
 
