@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-03-24
+
+### Fixed
+
+- **README**: Added 3 missing tools to table (`check_api_health`, `manage_dhcp_lease`, `manage_dtc`) — table now matches all 23 registered tools
+- **README**: Added Claude Code CLI connection examples (stdio + HTTP)
+- **README**: Added Remote Access section for HTTP transport usage
+- **README**: Fixed curl examples — added required `Accept` header and `Mcp-Session-Id` session flow for MCP streamable HTTP
+- **Makefile**: Switched from bare `python` to `uv run python` for compatibility with systems where only `python3` is available
+- **README**: Updated Quick Start to use `uv run python` consistently
+
 ## [1.7.0] - 2026-03-04
 
 ### Added
