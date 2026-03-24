@@ -6,7 +6,7 @@ from fastmcp import Client
 
 
 class TestToolCatalog:
-    async def test_returns_20_tools(self, mcp_server):
+    async def test_returns_23_tools(self, mcp_server):
         async with Client(mcp_server) as c:
             resources = await c.list_resources()
             # Find the tools resource
@@ -19,7 +19,7 @@ class TestToolCatalog:
 
             content = await c.read_resource(tools_uri)
             data = json.loads(content[0].text if hasattr(content[0], "text") else str(content[0]))
-            assert data["tool_count"] == 20
+            assert data["tool_count"] == 23
 
     async def test_domains_grouped(self, mcp_server):
         async with Client(mcp_server) as c:
