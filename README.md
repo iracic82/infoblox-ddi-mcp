@@ -66,10 +66,10 @@ cp .env.example .env
 # Edit .env — add INFOBLOX_API_KEY
 
 # Run (stdio)
-python mcp_intent.py
+uv run python mcp_intent.py
 
 # Run (HTTP)
-python mcp_intent.py --http
+uv run python mcp_intent.py --http
 ```
 
 ### Option B: Docker (one command)
@@ -144,6 +144,16 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```
 
 Restart Claude Desktop — the 23 tools appear in the tool picker.
+
+### Claude Code (CLI)
+
+```bash
+# Add the MCP server (stdio — Claude Code launches the process)
+claude mcp add infoblox-ddi -e INFOBLOX_API_KEY=your_api_key_here -- python /absolute/path/to/infoblox-ddi-mcp/mcp_intent.py
+
+# Or connect to a running HTTP server
+claude mcp add --transport http infoblox-ddi http://localhost:4005/mcp
+```
 
 ### Anthropic Python SDK
 
@@ -276,9 +286,10 @@ AEX has native MCP client support. In **Admin Console → Agent Studio**:
 ### Any HTTP Client
 
 ```bash
-# Initialize session
-curl -X POST http://127.0.0.1:4005/mcp \
+# Step 1: Initialize session (capture the Mcp-Session-Id header from the response)
+curl -v -X POST http://127.0.0.1:4005/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -289,15 +300,20 @@ curl -X POST http://127.0.0.1:4005/mcp \
       "clientInfo": {"name": "curl", "version": "1.0"}
     }
   }'
+# Look for the response header: Mcp-Session-Id: <session-id>
 
-# List available tools
+# Step 2: List available tools (pass the session ID from step 1)
 curl -X POST http://127.0.0.1:4005/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: <session-id>" \
   -d '{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}'
 
-# Call a tool
+# Step 3: Call a tool
 curl -X POST http://127.0.0.1:4005/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 3,
@@ -308,6 +324,44 @@ curl -X POST http://127.0.0.1:4005/mcp \
     }
   }'
 ```
+
+### Remote Access (HTTP Transport)
+
+Any MCP-compatible client can connect remotely over HTTP. Start the server with `--http` and point clients to the endpoint:
+
+```
+http://<host>:4005/mcp
+```
+
+**Local network:**
+```bash
+# Start the server
+python mcp_intent.py --http
+
+# Any client on the network connects to:
+# http://192.168.1.100:4005/mcp
+```
+
+**Docker (remote host):**
+```bash
+docker run -p 4005:4005 -e INFOBLOX_API_KEY=your_key infoblox-ddi-mcp
+
+# Clients connect to:
+# http://your-docker-host:4005/mcp
+```
+
+**With authentication:**
+```bash
+# Start with auth token
+MCP_AUTH_TOKEN=my-secret-token python mcp_intent.py --http
+
+# Clients must include the header:
+# Authorization: Bearer my-secret-token
+```
+
+**Production (TLS):** For internet-facing deployments, place the server behind a reverse proxy (nginx, API gateway) that handles TLS. See [Production Deployment](#production-deployment) below.
+
+> **Summary:** `stdio` = client launches the server locally. `HTTP` = server runs independently, clients connect to `http://host:4005/mcp`. Use `MCP_AUTH_TOKEN` to secure HTTP access.
 
 ---
 

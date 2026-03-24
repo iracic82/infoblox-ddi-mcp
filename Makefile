@@ -9,10 +9,10 @@ dev:  ## Install in editable mode
 	uv pip install -e .
 
 run:  ## Run MCP server (stdio transport)
-	python mcp_intent.py
+	uv run python mcp_intent.py
 
 run-http:  ## Run MCP server (HTTP transport)
-	python mcp_intent.py --http
+	uv run python mcp_intent.py --http
 
 # ─── Docker ─────────────────────────────────────────────────────────
 
@@ -40,10 +40,10 @@ format:  ## Run ruff formatter
 	ruff format mcp_intent.py services/
 
 test:  ## Run test suite
-	INFOBLOX_API_KEY=test_key_for_ci python -m pytest tests/ -v
+	INFOBLOX_API_KEY=test_key_for_ci uv run python -m pytest tests/ -v
 
 check:  ## Verify syntax
-	python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('Syntax OK')"
+	uv run python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('Syntax OK')"
 
 clean:  ## Remove build artifacts
 	rm -rf __pycache__ services/__pycache__ tests/__pycache__ .pytest_cache .ruff_cache *.pyc *.egg-info dist build
