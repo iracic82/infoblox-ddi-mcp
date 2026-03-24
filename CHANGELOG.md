@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-03-24
+
+### Added
+
+- **MCP resources**: `infoblox://spaces` and `infoblox://zones` — live resource URIs returning current IP spaces and DNS zones
+- **Pagination**: `explore_network` now accepts `limit` parameter (default 500) with truncation warnings when results exceed the limit
+- **Rollback suggestions**: `provision_host` partial failures now include explicit rollback `next_action` via `decommission_host`
+- **Error guidance**: All client-not-initialized failures now include `next_actions` pointing to `check_api_health()` and env var setup
+
+### Fixed
+
+- **Resource catalog**: `infoblox://tools` now correctly reports 23 tools (was 20) and includes `check_api_health`, `manage_dhcp_lease`, `manage_dtc` in their respective domains
+
+### Changed
+
+- Version bumped from 1.7.1 to 1.8.0 (5 MCP resources, 23 tools, 163 tests)
+
 ## [1.7.1] - 2026-03-24
 
 ### Fixed
