@@ -1,5 +1,5 @@
 # MCP Server
-fastmcp>=2.0.0
+fastmcp>=3.1.1
 
 # Infoblox API Client
 requests>=2.31.0
