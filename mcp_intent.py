@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "1.8.0"
+__version__ = "2.0.0"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -46,7 +46,27 @@ from services.infoblox_client import InfobloxClient
 from services.insights_client import InsightsClient
 
 # Initialize FastMCP server
-mcp = FastMCP("Infoblox DDI Intent Layer")
+mcp = FastMCP(
+    "Infoblox DDI Intent Layer",
+    version=__version__,
+    instructions="""You are connected to the Infoblox Universal DDI MCP server.
+This server provides 23 intent-level tools for managing DNS, DHCP, IPAM, security, and federation infrastructure.
+
+Key principles:
+- All destructive operations (create, update, delete) default to dry_run=True — always preview before executing.
+- Use human-readable names (space="prod", zone="example.com") — the server resolves them to IDs automatically.
+- When a tool fails, check the 'next_actions' field for guidance on what to do next.
+- Start with explore_network() or get_network_summary() to understand the infrastructure before making changes.
+- For troubleshooting, use diagnose_dns() or diagnose_ip_conflict() — they check multiple systems at once.
+
+Resources are available for browsing:
+- infoblox://spaces — list all IP spaces
+- infoblox://zones — list all DNS zones
+- infoblox://spaces/{name}/subnets — subnets in a specific space
+- infoblox://zones/{fqdn}/records — records in a specific zone
+- infoblox://health — live API health check
+""",
+)
 
 
 # ==================== Service Client Initialization ====================
@@ -725,7 +745,7 @@ def get_network_summary(scope: str | None = None) -> dict:
 # ==================== Provisioning Tools ====================
 
 
-@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False})
+@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False, "openWorldHint": True})
 def provision_host(
     hostname: str,
     space: str,
@@ -798,7 +818,15 @@ def provision_host(
                     step_result("Resolve IP space", "success", {"space_id": space_id, "name": spaces[0].get("name")})
                 )
             else:
-                return intent_response("failed", f"IP space '{space}' not found", steps)
+                return intent_response(
+                    "failed",
+                    f"IP space '{space}' not found",
+                    steps,
+                    next_actions=[
+                        "Use explore_network() to see available IP spaces",
+                        "Check the space name matches exactly (case-sensitive)",
+                    ],
+                )
         except Exception as e:
             return intent_response("failed", f"Failed to resolve IP space: {e}", steps)
 
@@ -820,11 +848,16 @@ def provision_host(
             elif len(subnets) == 1:
                 target_subnet_id = subnets[0]["id"]
             else:
-                subnet_list = [f"{s.get('address')}/{s.get('cidr')} (id={s.get('id')})" for s in subnets]
+                subnet_list = [f"{s.get('address')}/{s.get('cidr')}" for s in subnets]
                 return intent_response(
                     "failed",
-                    f"Multiple subnets in space '{space}': {subnet_list}. Specify 'subnet' or 'ip' to disambiguate.",
+                    f"Multiple subnets in space '{space}'. Specify 'subnet' or 'ip' to disambiguate.",
                     steps,
+                    result={"available_subnets": subnet_list},
+                    next_actions=[
+                        f"Pick a subnet and retry: provision_host(hostname='{hostname}', space='{space}', subnet='<CIDR from list>')",
+                        f"Or specify an IP directly: provision_host(hostname='{hostname}', space='{space}', ip='<address>')",
+                    ],
                 )
 
             available_ips = client.get_next_available_ip(target_subnet_id)
@@ -1008,7 +1041,7 @@ def provision_host(
     )
 
 
-@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False})
+@mcp.tool(annotations={"destructiveHint": False, "idempotentHint": False, "openWorldHint": True})
 def provision_dns(
     name: str,
     record_type: Literal["A", "AAAA", "CNAME", "MX", "TXT", "PTR", "SRV", "NS"],
@@ -1227,7 +1260,15 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
                             break
 
         if not hosts:
-            return intent_response("failed", f"No host found matching '{identifier}'", steps)
+            return intent_response(
+                "failed",
+                f"No host found matching '{identifier}'",
+                steps,
+                next_actions=[
+                    f"Search for the host: search_infrastructure(query='{identifier}')",
+                    "Use explore_network() to browse available hosts",
+                ],
+            )
 
         steps.append(
             step_result("Find hosts", "success", {"count": len(hosts), "hosts": [h.get("name") for h in hosts]})
@@ -1271,8 +1312,16 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
                 except Exception as e:
                     warnings.append(f"DNS record lookup failed: {e}")
 
-    except Exception as e:
-        return intent_response("failed", f"Failed to find host: {e}", steps)
+    except Exception:
+        return intent_response(
+            "failed",
+            f"Failed to find host matching '{identifier}'",
+            steps,
+            next_actions=[
+                f"Search for the host: search_infrastructure(query='{identifier}')",
+                "Verify the hostname or IP is correct",
+            ],
+        )
 
     # Step 2: Execute deletion if not dry_run
     if not dry_run:
@@ -1401,8 +1450,8 @@ def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False
         try:
             view_id = None
             if view and zone_found:
-                # Use the view from zone resolution
-                view_id = diagnostics["zone"].get("id", "").split("/")[-1] if False else None
+                # Use the view from zone resolution if available
+                view_id = diagnostics.get("zone", {}).get("view")
             client.flush_dns_cache(domain, view_id=view_id)
             steps.append(step_result("Flush DNS cache", "success", {"domain": domain}))
         except Exception as e:
@@ -2311,19 +2360,16 @@ def manage_network(
             if resource_type == "subnet":
                 if not address or not space_id:
                     return intent_response("failed", "Subnet create requires 'address' (CIDR) and 'space'.", steps)
-                # Parse CIDR
                 network = ipaddress.ip_network(address, strict=False)
-                kwargs = {}
-                if comment:
-                    kwargs["comment"] = comment
+                extra = {}
                 if tags:
-                    kwargs["tags"] = tags
+                    extra["tags"] = tags
                 resp = client.create_subnet(
                     address=str(network.network_address),
                     space=space_id,
                     comment=comment,
                     cidr=network.prefixlen,
-                    **{k: v for k, v in kwargs.items() if k not in ("comment",)},
+                    **extra,
                 )
                 result = resp.get("result", resp)
                 steps.append(step_result("Create subnet", "success", {"id": result.get("id"), "address": address}))
@@ -2335,8 +2381,15 @@ def manage_network(
                         "failed", "Address block create requires 'address' (CIDR) and 'space'.", steps
                     )
                 network = ipaddress.ip_network(address, strict=False)
+                extra = {}
+                if tags:
+                    extra["tags"] = tags
                 resp = client.create_address_block(
-                    address=str(network.network_address), space=space_id, comment=comment, cidr=network.prefixlen
+                    address=str(network.network_address),
+                    space=space_id,
+                    comment=comment,
+                    cidr=network.prefixlen,
+                    **extra,
                 )
                 result = resp.get("result", resp)
                 steps.append(
@@ -2660,7 +2713,7 @@ def manage_dns_zone(
                 return intent_response("failed", "Get requires 'resource_id' or 'fqdn'.", steps)
 
             if resource_type in ("auth_zone", "forward_zone"):
-                # Auth/forward zone get: resolve by fqdn or return zone info
+                # Auth/forward zone get: resolve by fqdn or return full zone details
                 if fqdn and not resource_id:
                     zone_id, s, err = resolve_zone(fqdn, view)
                     if s:
@@ -2668,18 +2721,18 @@ def manage_dns_zone(
                     if err:
                         return intent_response("failed", err, steps)
                     resource_id = zone_id
-                # List DNS views as bonus info
-                views_resp = client.list_dns_views(limit=50)
-                views = extract_results(views_resp)
-                steps.append(step_result("List DNS views", "success", {"count": len(views)}))
+                # Fetch full zone details
+                if resource_type == "auth_zone":
+                    zone_resp = client.get_auth_zone(resource_id)
+                else:
+                    zone_resp = client.get_forward_zone(resource_id)
+                zone_detail = zone_resp.get("result", zone_resp)
+                steps.append(step_result(f"Get {resource_type}", "success", {"id": resource_id}))
                 return intent_response(
                     "success",
-                    f"Zone resolved: {resource_id}",
+                    f"Retrieved {resource_type}: {zone_detail.get('fqdn', resource_id)}",
                     steps,
-                    result={
-                        "zone_id": resource_id,
-                        "dns_views": [{"id": v.get("id"), "name": v.get("name")} for v in views],
-                    },
+                    result=zone_detail,
                 )
             else:
                 if not resource_id:
@@ -4621,6 +4674,93 @@ def resource_dns_zones() -> str:
         )
     except Exception as e:
         return json.dumps({"error": str(e)})
+
+
+# ==================== MCP Resource Templates ====================
+
+
+@mcp.resource("infoblox://spaces/{space_name}/subnets")
+def resource_space_subnets(space_name: str) -> str:
+    """List subnets in a specific IP space by name."""
+    if not client:
+        return json.dumps({"error": "Infoblox client not initialized"})
+    try:
+        spaces = extract_results(client.list_ip_spaces(filter=f'name=="{sanitize_filter(space_name)}"'))
+        if not spaces:
+            spaces = extract_results(client.list_ip_spaces(filter=f'name~"{sanitize_filter(space_name)}"'))
+        if not spaces:
+            return json.dumps({"error": f"IP space '{space_name}' not found"})
+        space_id = spaces[0].get("id", "")
+        subnets = extract_results(client.list_subnets(filter=f'space=="{space_id}"'))
+        return json.dumps(
+            [
+                {
+                    "id": s.get("id", ""),
+                    "address": s.get("address", ""),
+                    "cidr": s.get("cidr", 0),
+                    "name": s.get("name", s.get("comment", "")),
+                    "utilization": s.get("utilization", {}),
+                }
+                for s in subnets
+            ],
+            indent=2,
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.resource("infoblox://zones/{zone_fqdn}/records")
+def resource_zone_records(zone_fqdn: str) -> str:
+    """List DNS records in a specific zone by FQDN."""
+    if not client:
+        return json.dumps({"error": "Infoblox client not initialized"})
+    try:
+        zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_fqdn)}"'))
+        if not zones:
+            zones = extract_results(client.list_auth_zones(filter=f'fqdn=="{sanitize_filter(zone_fqdn)}."'))
+        if not zones:
+            return json.dumps({"error": f"Zone '{zone_fqdn}' not found"})
+        zone_id = zones[0].get("id", "")
+        records = extract_results(client.list_dns_records(filter=f'zone=="{zone_id}"'))
+        return json.dumps(
+            [
+                {
+                    "id": r.get("id", ""),
+                    "name_in_zone": r.get("name_in_zone", ""),
+                    "type": r.get("type", ""),
+                    "rdata": r.get("rdata", {}),
+                    "ttl": r.get("ttl"),
+                }
+                for r in records
+            ],
+            indent=2,
+        )
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.resource("infoblox://health")
+def resource_health() -> str:
+    """Live health check of all API clients with response latency."""
+    import time as _time
+
+    health = {}
+    for name, c in [("ddi", client), ("insights", insights_client), ("atcfw", atcfw_client)]:
+        if c:
+            try:
+                start = _time.time()
+                if name == "ddi":
+                    c.list_ip_spaces(limit=1)
+                elif name == "insights":
+                    insights_client.list_insights(limit=1)
+                else:
+                    atcfw_client.list_security_policies(limit=1)
+                health[name] = {"status": "healthy", "latency_ms": round((_time.time() - start) * 1000)}
+            except Exception as e:
+                health[name] = {"status": "error", "error": str(e)[:100]}
+        else:
+            health[name] = {"status": "not_initialized"}
+    return json.dumps(health, indent=2)
 
 
 # ==================== MCP Prompts ====================

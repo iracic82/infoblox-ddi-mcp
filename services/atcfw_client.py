@@ -206,7 +206,7 @@ class AtcfwClient:
         if filter_expr:
             params["_filter"] = filter_expr
 
-        return self._request("GET", url, headers=self.session.headers, params=params, timeout=self.timeout)
+        return self._request("GET", url, params=params, timeout=self.timeout)
 
     def get_security_policy(self, policy_id: str) -> dict[str, Any]:
         """Get security policy by ID"""
@@ -282,7 +282,11 @@ class AtcfwClient:
             data["inserts_items"] = inserts
         if deletes:
             data["deletes_items"] = deletes
-        return self._request("PATCH", url, json=data, timeout=self.timeout)
+        if not data:
+            return {"result": "no changes — both inserts and deletes are empty"}
+        result = self._request("PATCH", url, json=data, timeout=self.timeout)
+        named_list_cache.clear()
+        return result
 
     # ==================== Application Filters ====================
 
@@ -301,6 +305,21 @@ class AtcfwClient:
         payload = {"name": name, "criteria": criteria, "description": description}
 
         return self._request("POST", url, json=payload, timeout=self.timeout)
+
+    def get_application_filter(self, filter_id: str) -> dict[str, Any]:
+        """Get specific application filter"""
+        url = f"{self.base_url}/api/atcfw/v1/application_filters/{filter_id}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_application_filter(self, filter_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update an application filter"""
+        url = f"{self.base_url}/api/atcfw/v1/application_filters/{filter_id}"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def delete_application_filter(self, filter_id: str) -> dict[str, Any]:
+        """Delete an application filter"""
+        url = f"{self.base_url}/api/atcfw/v1/application_filters/{filter_id}"
+        return self._request("DELETE", url, timeout=self.timeout)
 
     # ==================== Category Filters ====================
 
@@ -377,6 +396,21 @@ class AtcfwClient:
 
         return self._request("POST", url, json=payload, timeout=self.timeout)
 
+    def get_internal_domain_list(self, list_id: str) -> dict[str, Any]:
+        """Get specific internal domain list"""
+        url = f"{self.base_url}/api/atcfw/v1/internal_domain_lists/{list_id}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_internal_domain_list(self, list_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update an internal domain list"""
+        url = f"{self.base_url}/api/atcfw/v1/internal_domain_lists/{list_id}"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def delete_internal_domain_list(self, list_id: str) -> dict[str, Any]:
+        """Delete an internal domain list"""
+        url = f"{self.base_url}/api/atcfw/v1/internal_domain_lists/{list_id}"
+        return self._request("DELETE", url, timeout=self.timeout)
+
     # ==================== Access Codes (Bypass Codes) ====================
 
     def list_access_codes(self, filter_expr: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -402,3 +436,151 @@ class AtcfwClient:
         }
 
         return self._request("POST", url, json=payload, timeout=self.timeout)
+
+    def get_access_code(self, access_key: str) -> dict[str, Any]:
+        """Get specific access code by key"""
+        url = f"{self.base_url}/api/atcfw/v1/access_codes/{access_key}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_access_code(self, access_key: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update an access code"""
+        url = f"{self.base_url}/api/atcfw/v1/access_codes/{access_key}"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def delete_access_code(self, access_key: str) -> dict[str, Any]:
+        """Delete an access code"""
+        url = f"{self.base_url}/api/atcfw/v1/access_codes/{access_key}"
+        return self._request("DELETE", url, timeout=self.timeout)
+
+    # ==================== Security Policy CRUD (full) ====================
+
+    def create_security_policy(self, name: str, rules: list[dict] | None = None, **kwargs) -> dict[str, Any]:
+        """Create a security policy"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies"
+        payload = {"name": name, "rules": rules or [], **kwargs}
+        result = self._request("POST", url, json=payload, timeout=self.timeout)
+        security_policy_cache.clear()
+        return result
+
+    def update_security_policy(self, policy_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update a security policy"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}"
+        result = self._request("PUT", url, json=updates, timeout=self.timeout)
+        security_policy_cache.clear()
+        return result
+
+    def delete_security_policy(self, policy_id: str) -> dict[str, Any]:
+        """Delete a security policy"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}"
+        result = self._request("DELETE", url, timeout=self.timeout)
+        security_policy_cache.clear()
+        return result
+
+    # ==================== Security Policy Rules ====================
+
+    def list_security_policy_rules(self, policy_id: str) -> dict[str, Any]:
+        """List rules for a security policy"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}/rules"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def create_security_policy_rule(self, policy_id: str, rule: dict[str, Any]) -> dict[str, Any]:
+        """Create a rule in a security policy"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}/rules"
+        return self._request("POST", url, json=rule, timeout=self.timeout)
+
+    def get_security_policy_rule(self, policy_id: str, rule_id: str) -> dict[str, Any]:
+        """Get specific security policy rule"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}/rules/{rule_id}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_security_policy_rule(self, policy_id: str, rule_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update a security policy rule"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}/rules/{rule_id}"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def delete_security_policy_rule(self, policy_id: str, rule_id: str) -> dict[str, Any]:
+        """Delete a security policy rule"""
+        url = f"{self.base_url}/api/atcfw/v1/security_policies/{policy_id}/rules/{rule_id}"
+        return self._request("DELETE", url, timeout=self.timeout)
+
+    # ==================== Network Lists ====================
+
+    def list_network_lists(self, filter_expr: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List network lists"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists"
+        params = {"_limit": limit}
+        if filter_expr:
+            params["_filter"] = filter_expr
+        return self._request("GET", url, params=params, timeout=self.timeout)
+
+    def create_network_list(self, name: str, items: list[str] | None = None, **kwargs) -> dict[str, Any]:
+        """Create a network list"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists"
+        payload = {"name": name, "items": items or [], **kwargs}
+        return self._request("POST", url, json=payload, timeout=self.timeout)
+
+    def get_network_list(self, list_id: str) -> dict[str, Any]:
+        """Get specific network list"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists/{list_id}"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_network_list(self, list_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update a network list"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists/{list_id}"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def delete_network_list(self, list_id: str) -> dict[str, Any]:
+        """Delete a network list"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists/{list_id}"
+        return self._request("DELETE", url, timeout=self.timeout)
+
+    def partial_update_network_list_items(self, list_id: str, items_described: list[dict]) -> dict[str, Any]:
+        """Add/remove items from a network list without replacing the entire list"""
+        url = f"{self.base_url}/api/atcfw/v1/network_lists/{list_id}/items"
+        return self._request("PATCH", url, json={"items_described": items_described}, timeout=self.timeout)
+
+    # ==================== Threat Feeds & Indicators ====================
+
+    def list_threat_feeds(self) -> dict[str, Any]:
+        """List available threat feeds"""
+        url = f"{self.base_url}/api/atcfw/v1/threat_feeds"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def create_threat_indicator(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create or lookup a threat indicator"""
+        url = f"{self.base_url}/api/atcfw/v1/tid"
+        return self._request("POST", url, json=data, timeout=self.timeout)
+
+    # ==================== App/Block Approvals ====================
+
+    def list_app_approvals(self) -> dict[str, Any]:
+        """List application approvals"""
+        url = f"{self.base_url}/api/atcfw/v1/app_approvals"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_app_approvals(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update application approvals"""
+        url = f"{self.base_url}/api/atcfw/v1/app_approvals"
+        return self._request("PUT", url, json=updates, timeout=self.timeout)
+
+    def list_block_approvals(self) -> dict[str, Any]:
+        """List block approvals"""
+        url = f"{self.base_url}/api/atcfw/v1/block_approvals"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def update_block_approvals(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update block approvals"""
+        url = f"{self.base_url}/api/atcfw/v1/block_approvals"
+        return self._request("PATCH", url, json=updates, timeout=self.timeout)
+
+    # ==================== PoP Regions & DoH ====================
+
+    def list_pop_regions(self) -> dict[str, Any]:
+        """List Point of Presence (PoP) regions"""
+        url = f"{self.base_url}/api/atcfw/v1/pop_regions"
+        return self._request("GET", url, timeout=self.timeout)
+
+    def create_doh_fqdn(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create DoH (DNS over HTTPS) FQDN"""
+        url = f"{self.base_url}/api/atcfw/v1/doh_fqdns"
+        return self._request("POST", url, json=data, timeout=self.timeout)

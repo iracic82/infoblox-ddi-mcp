@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-30
+
+### Added
+
+- **121 new API methods** (182 → 303 total) covering previously missing endpoints:
+  - DHCP: servers, global config, option groups, option spaces, MAC address items, config profiles, DHCP filters, host associations, linked HA groups
+  - DNS Config: ACLs, auth/forward nameserver groups, DNS servers, DNS global config, DNS hosts, DNS services, zone copy, trust anchor export, DNSSEC key management, RPZ rules, record protection, domain name conversion
+  - Security (ATCFW): full security policy CRUD, policy rules, network lists, access code CRUD, application filter CRUD, internal domain list CRUD, threat feeds, threat indicators, app/block approvals, PoP regions, DoH FQDNs
+  - Federation: next available FLD, next appropriate delegation, next available overlapping/reserved blocks, pool-level block allocation
+  - IPAM: IP space full CRUD (get, create, update, delete)
+- **3 new MCP resource templates**: `infoblox://spaces/{name}/subnets`, `infoblox://zones/{fqdn}/records`, `infoblox://health`
+- **Server instructions** — LLM clients now receive usage guidance via MCP `instructions` field
+- **`openWorldHint`** annotations on `provision_host` and `provision_dns`
+
+### Fixed
+
+- **`list_rpz_zones`** — was querying `/dns/auth_zone` (returning all zones), now correctly uses `/dns/rpz` endpoint
+- **`delete_dns_record`** — was bypassing `_resource_endpoint` normalization, failing on bare IDs
+- **`diagnose_dns` cache flush** — dead code (`if False`) permanently disabled view-scoped flush
+- **`manage_dns_zone` get** — was returning DNS view list instead of actual zone details
+- **`manage_network` subnet/block create** — cleaned up redundant comment passing, added tags support for address blocks
+- **`partial_update_named_list_items`** — was not invalidating `named_list_cache` after mutations
+- **Security policy write methods** — `create/update/delete_security_policy` were not invalidating `security_policy_cache`
+- **`list_security_policies`** — removed redundant `headers=self.session.headers` parameter
+- **Error guidance** — `provision_host` space-not-found, multiple-subnets, and `decommission_host` failures now include `next_actions` with specific tool suggestions
+
+### Changed
+
+- Server version now correctly reports app version (was showing FastMCP version)
+- Version bumped from 1.8.0 to 2.0.0 (303 API methods, 8 MCP resources, 23 tools, 163 tests)
+
 ## [1.8.0] - 2026-03-24
 
 ### Added

@@ -319,6 +319,25 @@ class InfobloxClient:
 
         return self._request("GET", "/api/ddi/v1/ipam/ip_space", params=params)
 
+    def get_ip_space(self, space_id: str) -> dict[str, Any]:
+        """Get specific IP space by ID"""
+        return self._request("GET", self._resource_endpoint(space_id, "ipam/ip_space"))
+
+    def create_ip_space(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create an IP space"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/ipam/ip_space", json=data)
+
+    def update_ip_space(self, space_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update an IP space"""
+        return self._request("PATCH", self._resource_endpoint(space_id, "ipam/ip_space"), json=updates)
+
+    def delete_ip_space(self, space_id: str) -> dict[str, Any]:
+        """Delete an IP space"""
+        return self._request("DELETE", self._resource_endpoint(space_id, "ipam/ip_space"))
+
     def create_fixed_address(self, address: str, space: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
         """
         Reserve a fixed IP address
@@ -693,6 +712,14 @@ class InfobloxClient:
         """Delete option code"""
         return self._request("DELETE", self._resource_endpoint(code_id, "dhcp/option_code"))
 
+    # DHCP Filters (combined view of hardware + option filters)
+    def list_dhcp_filters(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List all DHCP filters (combined hardware and option filters)"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/filter", params=params)
+
     # Hardware Filter operations
     def list_hardware_filters(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
         """List hardware filters"""
@@ -758,6 +785,162 @@ class InfobloxClient:
         """Delete option filter (moves to recycle bin)"""
         return self._request("DELETE", self._resource_endpoint(filter_id, "dhcp/option_filter"))
 
+    # ==================== DHCP Config Profile Operations ====================
+
+    def list_config_profiles(self, object_id: str, limit: int = 100) -> dict[str, Any]:
+        """List DHCP config profiles for a specific object (subnet, range, etc.)"""
+        params = {"_limit": limit, "object_id": object_id}
+        return self._request("GET", "/api/ddi/v1/dhcp/config_profile/profiles", params=params)
+
+    def list_config_profile_subnets(self, profile_id: str, limit: int = 100) -> dict[str, Any]:
+        """List subnets associated with a config profile"""
+        params = {"_limit": limit, "profile_id": profile_id}
+        return self._request("GET", "/api/ddi/v1/dhcp/config_profile/subnets", params=params)
+
+    def link_config_profile(self, profile_id: str, object_id: str) -> dict[str, Any]:
+        """Link a config profile to an object (subnet, range, etc.)"""
+        return self._request(
+            "POST", "/api/ddi/v1/dhcp/config_profile/link_profile", json={"profile": profile_id, "object": object_id}
+        )
+
+    def delink_config_profile(self, profile_id: str, object_id: str) -> dict[str, Any]:
+        """Delink a config profile from an object"""
+        return self._request(
+            "POST", "/api/ddi/v1/dhcp/config_profile/delink_profile", json={"profile": profile_id, "object": object_id}
+        )
+
+    # ==================== DHCP Global/Server Config ====================
+
+    def get_dhcp_global(self, global_id: str | None = None) -> dict[str, Any]:
+        """Get DHCP global configuration"""
+        if global_id:
+            return self._request("GET", self._resource_endpoint(global_id, "dhcp/global"))
+        return self._request("GET", "/api/ddi/v1/dhcp/global")
+
+    def update_dhcp_global(self, global_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DHCP global configuration"""
+        return self._request("PATCH", self._resource_endpoint(global_id, "dhcp/global"), json=updates)
+
+    def list_dhcp_servers(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DHCP servers"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/server", params=params)
+
+    def get_dhcp_server(self, server_id: str) -> dict[str, Any]:
+        """Get specific DHCP server by ID"""
+        return self._request("GET", self._resource_endpoint(server_id, "dhcp/server"))
+
+    def create_dhcp_server(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DHCP server"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dhcp/server", json=data)
+
+    def update_dhcp_server(self, server_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DHCP server"""
+        return self._request("PATCH", self._resource_endpoint(server_id, "dhcp/server"), json=updates)
+
+    def delete_dhcp_server(self, server_id: str) -> dict[str, Any]:
+        """Delete DHCP server"""
+        return self._request("DELETE", self._resource_endpoint(server_id, "dhcp/server"))
+
+    # ==================== DHCP Option Group/Space ====================
+
+    def list_option_groups(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DHCP option groups"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/option_group", params=params)
+
+    def create_option_group(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DHCP option group"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dhcp/option_group", json=data)
+
+    def get_option_group(self, group_id: str) -> dict[str, Any]:
+        """Get specific DHCP option group"""
+        return self._request("GET", self._resource_endpoint(group_id, "dhcp/option_group"))
+
+    def update_option_group(self, group_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DHCP option group"""
+        return self._request("PATCH", self._resource_endpoint(group_id, "dhcp/option_group"), json=updates)
+
+    def delete_option_group(self, group_id: str) -> dict[str, Any]:
+        """Delete DHCP option group"""
+        return self._request("DELETE", self._resource_endpoint(group_id, "dhcp/option_group"))
+
+    def list_option_spaces(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DHCP option spaces"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/option_space", params=params)
+
+    def create_option_space(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DHCP option space"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dhcp/option_space", json=data)
+
+    def get_option_space(self, space_id: str) -> dict[str, Any]:
+        """Get specific DHCP option space"""
+        return self._request("GET", self._resource_endpoint(space_id, "dhcp/option_space"))
+
+    def update_option_space(self, space_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DHCP option space"""
+        return self._request("PATCH", self._resource_endpoint(space_id, "dhcp/option_space"), json=updates)
+
+    def delete_option_space(self, space_id: str) -> dict[str, Any]:
+        """Delete DHCP option space"""
+        return self._request("DELETE", self._resource_endpoint(space_id, "dhcp/option_space"))
+
+    # ==================== DHCP MAC Address Items ====================
+
+    def list_mac_address_items(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List MAC address items"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dhcp/mac_address_item", params=params)
+
+    def create_mac_address_item(self, mac_address: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a MAC address item"""
+        data = {"mac_address": mac_address, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dhcp/mac_address_item", json=data)
+
+    def get_mac_address_item(self, item_id: str) -> dict[str, Any]:
+        """Get specific MAC address item"""
+        return self._request("GET", self._resource_endpoint(item_id, "dhcp/mac_address_item"))
+
+    def update_mac_address_item(self, item_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update MAC address item"""
+        return self._request("PATCH", self._resource_endpoint(item_id, "dhcp/mac_address_item"), json=updates)
+
+    def delete_mac_address_item(self, item_id: str) -> dict[str, Any]:
+        """Delete MAC address item"""
+        return self._request("DELETE", self._resource_endpoint(item_id, "dhcp/mac_address_item"))
+
+    def bulk_create_mac_address_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Bulk create MAC address items"""
+        return self._request("POST", "/api/ddi/v1/dhcp/mac_address_item/bulk_create", json={"items": items})
+
+    def get_dhcp_host_associations(self, host_id: str) -> dict[str, Any]:
+        """Get associations for a DHCP host"""
+        return self._request("GET", f"{self._resource_endpoint(host_id, 'dhcp/host')}/associations")
+
+    def get_linked_ha_groups(self, ha_group_ids: list[str]) -> dict[str, Any]:
+        """Get linked HA groups"""
+        return self._request("POST", "/api/ddi/v1/dhcp/ha_group/linked_ha_groups", json={"ha_group_ids": ha_group_ids})
+
     # ==================== DNS Data API Methods ====================
 
     def list_dns_records(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -811,7 +994,7 @@ class InfobloxClient:
 
     def delete_dns_record(self, record_id: str) -> dict[str, Any]:
         """Delete DNS record (moves to recycle bin)"""
-        return self._request("DELETE", f"/api/ddi/v1/{record_id}")
+        return self._request("DELETE", self._resource_endpoint(record_id, "dns/record"))
 
     def create_aaaa_record(
         self,
@@ -1017,6 +1200,22 @@ class InfobloxClient:
         dns_zone_cache.clear()
         return result
 
+    def get_auth_zone(self, zone_id: str) -> dict[str, Any]:
+        """Get specific auth zone by ID"""
+        return self._request("GET", self._resource_endpoint(zone_id, "dns/auth_zone"))
+
+    def update_auth_zone(self, zone_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update auth zone"""
+        result = self._request("PATCH", self._resource_endpoint(zone_id, "dns/auth_zone"), json=updates)
+        dns_zone_cache.clear()
+        return result
+
+    def delete_auth_zone(self, zone_id: str) -> dict[str, Any]:
+        """Delete auth zone"""
+        result = self._request("DELETE", self._resource_endpoint(zone_id, "dns/auth_zone"))
+        dns_zone_cache.clear()
+        return result
+
     @cached_method(dns_zone_cache)
     def list_forward_zones(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
         """
@@ -1059,6 +1258,22 @@ class InfobloxClient:
         dns_zone_cache.clear()
         return result
 
+    def get_forward_zone(self, zone_id: str) -> dict[str, Any]:
+        """Get specific forward zone by ID"""
+        return self._request("GET", self._resource_endpoint(zone_id, "dns/forward_zone"))
+
+    def update_forward_zone(self, zone_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update forward zone"""
+        result = self._request("PATCH", self._resource_endpoint(zone_id, "dns/forward_zone"), json=updates)
+        dns_zone_cache.clear()
+        return result
+
+    def delete_forward_zone(self, zone_id: str) -> dict[str, Any]:
+        """Delete forward zone"""
+        result = self._request("DELETE", self._resource_endpoint(zone_id, "dns/forward_zone"))
+        dns_zone_cache.clear()
+        return result
+
     def list_dns_views(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
         """List DNS views"""
         params = {"_limit": limit}
@@ -1092,11 +1307,11 @@ class InfobloxClient:
 
     # RPZ Zone operations
     def list_rpz_zones(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
-        """List Response Policy Zones"""
+        """List Response Policy Zones (via dedicated RPZ endpoint)"""
         params = {"_limit": limit}
         if filter:
             params["_filter"] = filter
-        return self._request("GET", "/api/ddi/v1/dns/auth_zone", params=params)
+        return self._request("GET", "/api/ddi/v1/dns/rpz", params=params)
 
     def create_rpz_zone(
         self, name: str, primary_type: str = "cloud", view: str | None = None, comment: str | None = None, **kwargs
@@ -1113,19 +1328,19 @@ class InfobloxClient:
         data = {"fqdn": name, "primary_type": primary_type, "comment": comment, **kwargs}
         if view:
             data["view"] = view
-        return self._request("POST", "/api/ddi/v1/dns/auth_zone", json=data)
+        return self._request("POST", "/api/ddi/v1/dns/rpz", json=data)
 
     def get_rpz_zone(self, zone_id: str) -> dict[str, Any]:
         """Get specific RPZ zone by ID"""
-        return self._request("GET", self._resource_endpoint(zone_id, "dns/auth_zone"))
+        return self._request("GET", self._resource_endpoint(zone_id, "dns/rpz"))
 
     def update_rpz_zone(self, zone_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update RPZ zone"""
-        return self._request("PATCH", self._resource_endpoint(zone_id, "dns/auth_zone"), json=updates)
+        return self._request("PATCH", self._resource_endpoint(zone_id, "dns/rpz"), json=updates)
 
     def delete_rpz_zone(self, zone_id: str) -> dict[str, Any]:
         """Delete RPZ zone"""
-        return self._request("DELETE", self._resource_endpoint(zone_id, "dns/auth_zone"))
+        return self._request("DELETE", self._resource_endpoint(zone_id, "dns/rpz"))
 
     def reorder_rpz_zones(self, zone_ids: list[str]) -> dict[str, Any]:
         """
@@ -1219,6 +1434,227 @@ class InfobloxClient:
         if view_id:
             data["view"] = view_id
         return self._request("POST", "/api/ddi/v1/dns/cache_flush", json=data)
+
+    # ==================== DNS Config API Methods ====================
+
+    # DNS ACL operations
+    def list_dns_acls(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS ACLs"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/acl", params=params)
+
+    def create_dns_acl(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create a DNS ACL"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/acl", json=data)
+
+    def get_dns_acl(self, acl_id: str) -> dict[str, Any]:
+        """Get specific DNS ACL"""
+        return self._request("GET", self._resource_endpoint(acl_id, "dns/acl"))
+
+    def update_dns_acl(self, acl_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS ACL"""
+        return self._request("PATCH", self._resource_endpoint(acl_id, "dns/acl"), json=updates)
+
+    def delete_dns_acl(self, acl_id: str) -> dict[str, Any]:
+        """Delete DNS ACL"""
+        return self._request("DELETE", self._resource_endpoint(acl_id, "dns/acl"))
+
+    # DNS Auth Nameserver Group operations
+    def list_auth_nsgs(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List auth nameserver groups"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/auth_nsg", params=params)
+
+    def create_auth_nsg(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create auth nameserver group"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/auth_nsg", json=data)
+
+    def get_auth_nsg(self, nsg_id: str) -> dict[str, Any]:
+        """Get specific auth nameserver group"""
+        return self._request("GET", self._resource_endpoint(nsg_id, "dns/auth_nsg"))
+
+    def update_auth_nsg(self, nsg_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update auth nameserver group"""
+        return self._request("PATCH", self._resource_endpoint(nsg_id, "dns/auth_nsg"), json=updates)
+
+    def delete_auth_nsg(self, nsg_id: str) -> dict[str, Any]:
+        """Delete auth nameserver group"""
+        return self._request("DELETE", self._resource_endpoint(nsg_id, "dns/auth_nsg"))
+
+    # DNS Forward Nameserver Group operations
+    def list_forward_nsgs(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List forward nameserver groups"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/forward_nsg", params=params)
+
+    def create_forward_nsg(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create forward nameserver group"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/forward_nsg", json=data)
+
+    def get_forward_nsg(self, nsg_id: str) -> dict[str, Any]:
+        """Get specific forward nameserver group"""
+        return self._request("GET", self._resource_endpoint(nsg_id, "dns/forward_nsg"))
+
+    def update_forward_nsg(self, nsg_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update forward nameserver group"""
+        return self._request("PATCH", self._resource_endpoint(nsg_id, "dns/forward_nsg"), json=updates)
+
+    def delete_forward_nsg(self, nsg_id: str) -> dict[str, Any]:
+        """Delete forward nameserver group"""
+        return self._request("DELETE", self._resource_endpoint(nsg_id, "dns/forward_nsg"))
+
+    # DNS Server operations
+    def list_dns_servers(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS servers"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/server", params=params)
+
+    def create_dns_server(self, name: str, comment: str | None = None, **kwargs) -> dict[str, Any]:
+        """Create DNS server"""
+        data = {"name": name, **kwargs}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/server", json=data)
+
+    def get_dns_server(self, server_id: str) -> dict[str, Any]:
+        """Get specific DNS server"""
+        return self._request("GET", self._resource_endpoint(server_id, "dns/server"))
+
+    def update_dns_server(self, server_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS server"""
+        return self._request("PATCH", self._resource_endpoint(server_id, "dns/server"), json=updates)
+
+    def delete_dns_server(self, server_id: str) -> dict[str, Any]:
+        """Delete DNS server"""
+        return self._request("DELETE", self._resource_endpoint(server_id, "dns/server"))
+
+    # DNS Global config
+    def get_dns_global(self, global_id: str | None = None) -> dict[str, Any]:
+        """Get DNS global configuration"""
+        if global_id:
+            return self._request("GET", self._resource_endpoint(global_id, "dns/global"))
+        return self._request("GET", "/api/ddi/v1/dns/global")
+
+    def update_dns_global(self, global_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS global configuration"""
+        return self._request("PATCH", self._resource_endpoint(global_id, "dns/global"), json=updates)
+
+    # DNS Host config (read/update only)
+    def list_dns_hosts(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS host configurations"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/host", params=params)
+
+    def get_dns_host(self, host_id: str) -> dict[str, Any]:
+        """Get specific DNS host configuration"""
+        return self._request("GET", self._resource_endpoint(host_id, "dns/host"))
+
+    def update_dns_host(self, host_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update DNS host configuration"""
+        return self._request("PATCH", self._resource_endpoint(host_id, "dns/host"), json=updates)
+
+    # DNS Service (read-only)
+    def list_dns_services(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List DNS services"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/service", params=params)
+
+    def get_dns_service(self, service_id: str) -> dict[str, Any]:
+        """Get specific DNS service"""
+        return self._request("GET", self._resource_endpoint(service_id, "dns/service"))
+
+    # DNS Zone operations (copy, trust anchors)
+    def copy_auth_zone(self, zone_id: str, target_view: str, comment: str | None = None) -> dict[str, Any]:
+        """Copy an auth zone to another view"""
+        data = {"id": zone_id, "target_view": target_view}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone/copy", json=data)
+
+    def copy_forward_zone(self, zone_id: str, target_view: str, comment: str | None = None) -> dict[str, Any]:
+        """Copy a forward zone to another view"""
+        data = {"id": zone_id, "target_view": target_view}
+        if comment:
+            data["comment"] = comment
+        return self._request("POST", "/api/ddi/v1/dns/forward_zone/copy", json=data)
+
+    def export_trust_anchors(self, zone_ids: list[str]) -> dict[str, Any]:
+        """Export DNSSEC trust anchors for zones"""
+        return self._request("POST", "/api/ddi/v1/dns/auth_zone/export_trust_anchors", json={"zone_ids": zone_ids})
+
+    def delete_dnssec_key(self, zone_id: str, key_id: str) -> dict[str, Any]:
+        """Delete a DNSSEC key from a zone"""
+        return self._request("DELETE", f"/api/ddi/v1/{zone_id}/dnssec_key/{key_id}")
+
+    def import_keyset(self, zone_id: str, keyset: dict[str, Any]) -> dict[str, Any]:
+        """Import a DNSSEC keyset into a zone"""
+        return self._request("POST", f"/api/ddi/v1/{zone_id}/import_keyset", json=keyset)
+
+    # DNS utility endpoints
+    def convert_domain_name(self, domain_name: str) -> dict[str, Any]:
+        """Convert domain name between formats (e.g., IDN to punycode)"""
+        return self._request("GET", f"/api/ddi/v1/dns/convert_domain_name/{domain_name}")
+
+    def convert_rname(self, email_address: str) -> dict[str, Any]:
+        """Convert email address to DNS rname format"""
+        return self._request("GET", f"/api/ddi/v1/dns/convert_rname/{email_address}")
+
+    # ==================== DNS Data — RPZ Rules ====================
+
+    def list_rpz_rules(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:
+        """List RPZ rules"""
+        params = {"_limit": limit}
+        if filter:
+            params["_filter"] = filter
+        return self._request("GET", "/api/ddi/v1/dns/rpz_rule", params=params)
+
+    def create_rpz_rule(self, name: str, zone: str, rdata: dict[str, Any], **kwargs) -> dict[str, Any]:
+        """Create RPZ rule"""
+        data = {"name": name, "zone": zone, "rdata": rdata, **kwargs}
+        return self._request("POST", "/api/ddi/v1/dns/rpz_rule", json=data)
+
+    def get_rpz_rule(self, rule_id: str) -> dict[str, Any]:
+        """Get specific RPZ rule"""
+        return self._request("GET", self._resource_endpoint(rule_id, "dns/rpz_rule"))
+
+    def update_rpz_rule(self, rule_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Update RPZ rule"""
+        return self._request("PATCH", self._resource_endpoint(rule_id, "dns/rpz_rule"), json=updates)
+
+    def delete_rpz_rule(self, rule_id: str) -> dict[str, Any]:
+        """Delete RPZ rule"""
+        return self._request("DELETE", self._resource_endpoint(rule_id, "dns/rpz_rule"))
+
+    # DNS Record operations (additional)
+    def increment_serial(self, record_id: str) -> dict[str, Any]:
+        """Increment SOA serial number"""
+        return self._request("POST", f"/api/ddi/v1/{record_id}/serial_increment")
+
+    def configure_record_protection(self, zone_id: str, protection: dict[str, Any]) -> dict[str, Any]:
+        """Configure record protection for a zone"""
+        data = {"zone": zone_id, **protection}
+        return self._request("POST", "/api/ddi/v1/dns/configure_record_protection", json=data)
 
     # Infrastructure Management API
     def list_infra_hosts(self, limit: int = 100) -> dict[str, Any]:
@@ -1487,6 +1923,76 @@ class InfobloxClient:
             data: Delegation data to preview
         """
         return self._request("POST", "/api/ddi/v1/federation/forward_looking_delegation_preview", json=data)
+
+    def list_next_available_fld(self, block_id: str) -> dict[str, Any]:
+        """List next available forward-looking delegation objects"""
+        return self._request("GET", "/api/ddi/v1/federation/list_next_available_fld", params={"id": block_id})
+
+    def create_next_available_fld(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create next available forward-looking delegation objects"""
+        return self._request("POST", "/api/ddi/v1/federation/create_next_available_fld", json=data)
+
+    def next_appropriate_delegation(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create next appropriate delegation"""
+        return self._request("POST", "/api/ddi/v1/federation/next_appropriate_delegation", json=data)
+
+    # Federated Block — next_available sub-resources
+    def list_next_available_overlapping_block(self, block_id: str, cidr: int | None = None) -> dict[str, Any]:
+        """List next available overlapping blocks within a federated block"""
+        params = {}
+        if cidr:
+            params["cidr"] = cidr
+        return self._request(
+            "GET",
+            f"{self._resource_endpoint(block_id, 'federation/federated_block')}/next_available_overlapping_block",
+            params=params,
+        )
+
+    def create_next_available_overlapping_block(self, block_id: str, cidr: int, count: int = 1) -> dict[str, Any]:
+        """Allocate next available overlapping block"""
+        return self._request(
+            "POST",
+            f"{self._resource_endpoint(block_id, 'federation/federated_block')}/next_available_overlapping_block",
+            json={"cidr": cidr, "count": count},
+        )
+
+    def list_next_available_reserved_block(self, block_id: str, cidr: int | None = None) -> dict[str, Any]:
+        """List next available reserved blocks within a federated block"""
+        params = {}
+        if cidr:
+            params["cidr"] = cidr
+        return self._request(
+            "GET",
+            f"{self._resource_endpoint(block_id, 'federation/federated_block')}/next_available_reserved_block",
+            params=params,
+        )
+
+    def create_next_available_reserved_block(self, block_id: str, cidr: int, count: int = 1) -> dict[str, Any]:
+        """Allocate next available reserved block"""
+        return self._request(
+            "POST",
+            f"{self._resource_endpoint(block_id, 'federation/federated_block')}/next_available_reserved_block",
+            json={"cidr": cidr, "count": count},
+        )
+
+    def list_pool_next_available_block(self, pool_id: str, cidr: int | None = None) -> dict[str, Any]:
+        """List next available federated blocks within a pool"""
+        params = {}
+        if cidr:
+            params["cidr"] = cidr
+        return self._request(
+            "GET",
+            f"{self._resource_endpoint(pool_id, 'federation/federated_pool')}/next_available_federated_block",
+            params=params,
+        )
+
+    def create_pool_next_available_block(self, pool_id: str, cidr: int, count: int = 1) -> dict[str, Any]:
+        """Allocate next available federated block from a pool"""
+        return self._request(
+            "POST",
+            f"{self._resource_endpoint(pool_id, 'federation/federated_pool')}/next_available_federated_block",
+            json={"cidr": cidr, "count": count},
+        )
 
     # Federated Pools
     def list_federated_pools(self, filter: str | None = None, limit: int = 100) -> dict[str, Any]:

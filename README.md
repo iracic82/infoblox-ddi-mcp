@@ -14,7 +14,7 @@ Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, D
 
 ## Why Intent-Level Tools (Not 1:1 API Mapping)
 
-The Infoblox Universal DDI platform has **98+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** that abstract multi-step operations into single calls.
+The Infoblox Universal DDI platform has **300+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** backed by **303 API methods** that abstract multi-step operations into single calls.
 
 **The problem with 1:1 mapping:**
 
@@ -34,9 +34,9 @@ The Infoblox Universal DDI platform has **98+ REST API endpoints** across DDI, S
 provision_host(hostname="web-01", space="prod", zone="example.com")
 ```
 
-| Concern | 1:1 Mapping (98 tools) | Intent Layer (23 tools) |
+| Concern | 1:1 Mapping (300+ tools) | Intent Layer (23 tools) |
 |---------|----------------------|------------------------|
-| **LLM tool selection** | Agent must choose from 98 tools — high hallucination rate | 23 tools with `USE THIS for X / For Y use Z` disambiguation |
+| **LLM tool selection** | Agent must choose from 300+ tools — high hallucination rate | 23 tools with `USE THIS for X / For Y use Z` disambiguation |
 | **Token efficiency** | 5-7 API calls per workflow, each consuming context window | Single call, single response |
 | **Error handling** | Agent must implement rollback, partial-success, retry | Server-side orchestration with `steps[]` tracking |
 | **Domain knowledge** | Agent needs to know Infoblox resource IDs, filter syntax, API paths | Agent speaks business intent: "provision host", "diagnose DNS" |
@@ -713,7 +713,7 @@ make run            Run MCP server (stdio)
 make run-http       Run MCP server (HTTP)
 make lint           Run ruff linter
 make format         Run ruff formatter
-make test           Run test suite (129 tests)
+make test           Run test suite (163 tests)
 make docker-build   Build Docker image
 make docker-run     Run Docker container
 make docker-up      Start with docker compose
@@ -740,7 +740,7 @@ infoblox-ddi-mcp/
 │   ├── insights_client.py     ← SOC Insights API client (13 methods)
 │   ├── atcfw_client.py        ← DNS Security API client (12 methods)
 │   └── metrics.py             ← Internal metrics collection
-├── tests/                     ← 129 tests (validators, resolvers, tools, resources)
+├── tests/                     ← 163 tests (validators, resolvers, tools, resources)
 │   ├── conftest.py
 │   ├── test_validation.py
 │   ├── test_resolvers.py
