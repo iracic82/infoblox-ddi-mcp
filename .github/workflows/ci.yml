@@ -48,11 +48,11 @@ jobs:
       - name: Syntax check
         run: uv run python -c "import py_compile; py_compile.compile('mcp_intent.py', doraise=True); print('OK')"
 
-      - name: Verify 23 tools registered
+      - name: Verify 26 tools registered
         run: |
           count=$(grep -c '@mcp.tool(' mcp_intent.py)
           echo "Found $count tools"
-          [ "$count" -eq 23 ] || (echo "Expected 23 tools, found $count" && exit 1)
+          [ "$count" -eq 26 ] || (echo "Expected 26 tools, found $count" && exit 1)
 
       - name: Verify imports
         run: |

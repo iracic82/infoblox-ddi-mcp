@@ -1,4 +1,4 @@
-"""Tests for all 20 MCP tools via FastMCP Client (~60 tests).
+"""Tests for all MCP tools via FastMCP Client.
 
 Each tool gets 2-4 tests:
   1. Happy path with mocked API responses
@@ -1202,3 +1202,44 @@ class TestHealthEndpoint:
         async with Client(mcp_server) as c:
             r = parse_tool_result(await c.call_tool("check_api_health"))
         assert r["status"] in ("success", "partial")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# manage_doh — DoH, PoP regions, threat feeds, approvals
+# ═══════════════════════════════════════════════════════════════════
+
+POP_REGION = {"id": "pop/1", "name": "us-east-1"}
+THREAT_FEED = {"id": "tf/1", "name": "default-blocklist"}
+
+
+@pytest.mark.usefixtures("mock_atcfw_client")
+class TestManageDoh:
+    async def test_list_pop_regions(self, mcp_server, mock_atcfw_client):
+        mock_atcfw_client.list_pop_regions.return_value = _api([POP_REGION])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_doh", {"action": "list_pop_regions"}))
+        assert r["status"] == "success"
+        assert r["result"][0]["name"] == "us-east-1"
+
+    async def test_list_threat_feeds(self, mcp_server, mock_atcfw_client):
+        mock_atcfw_client.list_threat_feeds.return_value = _api([THREAT_FEED])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_doh", {"action": "list_threat_feeds"}))
+        assert r["status"] == "success"
+        assert len(r["result"]) == 1
+
+    async def test_no_client(self, mcp_server, monkeypatch):
+        import mcp_intent
+
+        monkeypatch.setattr(mcp_intent, "atcfw_client", None)
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_doh", {"action": "list_pop_regions"}))
+        assert r["status"] == "failed"
+        assert "INFOBLOX_API_KEY" in r["summary"]
+
+    async def test_create_doh_fqdn_no_params_fails(self, mcp_server, mock_atcfw_client):
+        # create_doh_fqdn with neither fqdn nor data should return failed
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_doh", {"action": "create_doh_fqdn"}))
+        assert r["status"] == "failed"
+

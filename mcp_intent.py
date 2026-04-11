@@ -2,7 +2,7 @@
 Infoblox DDI Intent-Layer MCP Server
 
 High-level workflow tools for agentic AI integration.
-Instead of 98 atomic CRUD operations, this server exposes 23 intent-level tools
+Instead of 98 atomic CRUD operations, this server exposes 26 intent-level tools
 that orchestrate multi-step DDI workflows automatically — covering 100% of the
 Infoblox BloxOne DDI API surface.
 
@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -50,7 +50,7 @@ mcp = FastMCP(
     "Infoblox DDI Intent Layer",
     version=__version__,
     instructions="""You are connected to the Infoblox Universal DDI MCP server.
-This server provides 23 intent-level tools for managing DNS, DHCP, IPAM, security, and federation infrastructure.
+This server provides 26 intent-level tools for managing DNS, DHCP, IPAM, security, and federation infrastructure.
 
 Key principles:
 - All destructive operations (create, update, delete) default to dry_run=True — always preview before executing.
@@ -199,6 +199,47 @@ def validate_fqdn(fqdn: str) -> tuple:
     if re.match(pattern, fqdn) and len(fqdn) <= 253:
         return True, ""
     return False, f"Invalid FQDN '{fqdn}'. Must be a valid domain name."
+
+
+def validate_dns_value(value: str, record_type: str) -> tuple:
+    """Validate a DNS record value against its record type. Returns (is_valid, error_msg)."""
+    rt = record_type.upper()
+    if rt == "A":
+        try:
+            if not isinstance(ipaddress.ip_address(value), ipaddress.IPv4Address):
+                return False, f"Record type A requires an IPv4 address, got '{value}'. Use AAAA for IPv6."
+        except ValueError:
+            return False, f"Record type A requires a valid IPv4 address, got '{value}'"
+    elif rt == "AAAA":
+        try:
+            if not isinstance(ipaddress.ip_address(value), ipaddress.IPv6Address):
+                return False, f"Record type AAAA requires an IPv6 address, got '{value}'. Use A for IPv4."
+        except ValueError:
+            return False, f"Record type AAAA requires a valid IPv6 address, got '{value}'"
+    elif rt in ("CNAME", "NS"):
+        return validate_fqdn(value.rstrip("."))
+    # MX exchange domain, PTR target, TXT content, SRV target: validated by the API
+    return True, ""
+
+
+def sanitize_query(value: str, max_length: int = 256) -> str:
+    """Sanitize a free-form search/filter term (not a filter expression).
+
+    Unlike sanitize_filter, this preserves the value as-is (no operator stripping)
+    since it is passed as a search parameter, not interpolated into a filter string.
+    """
+    return value.strip()[:max_length]
+
+
+def validate_insight_id(insight_id: str) -> tuple:
+    """Validate a security insight ID. Returns (is_valid, error_msg)."""
+    if not insight_id or not insight_id.strip():
+        return False, "insight_id cannot be empty"
+    if len(insight_id) > 256:
+        return False, f"insight_id is too long ({len(insight_id)} chars, max 256)"
+    if any(c in insight_id for c in ("\n", "\r", "\t", "\x00")):
+        return False, "insight_id contains invalid control characters"
+    return True, ""
 
 
 # ==================== Resolver Functions ====================
@@ -1099,6 +1140,14 @@ def provision_dns(
     if not zone:
         return intent_response("failed", "Could not determine DNS zone. Provide zone parameter or use FQDN as name.")
 
+    valid, err = validate_fqdn(zone.rstrip("."))
+    if not valid:
+        return intent_response("failed", f"Invalid DNS zone: {err}")
+
+    valid, err = validate_dns_value(value, record_type)
+    if not valid:
+        return intent_response("failed", err)
+
     # Step 1: Find the zone
     zone_id, z_step, z_err = resolve_zone(zone, view)
     if z_step:
@@ -1903,7 +1952,9 @@ def investigate_threat(
 
     steps = []
     warnings = []
-    limit = min(limit, 100)
+    limit = min(max(limit, 1), 100)
+    if query:
+        query = sanitize_query(query) or None
 
     # Step 1: Get security insights
     try:
@@ -2408,7 +2459,20 @@ def manage_network(
                 return intent_response("success", f"IP range {start}-{end} created", steps, result=result)
 
             elif resource_type == "ip_space":
-                return intent_response("failed", "IP space creation is not supported via API. Use the Infoblox Portal.")
+                if not name:
+                    return intent_response("failed", "IP space create requires 'name'.", steps)
+                if dry_run:
+                    return intent_response(
+                        "success",
+                        f"DRY RUN: Would create IP space '{name}'",
+                        steps,
+                        result={"name": name, "comment": comment},
+                        warnings=["This is a DRY RUN. Set dry_run=False to actually create."],
+                    )
+                resp = client.create_ip_space(name=name, comment=comment)
+                result = resp.get("result", resp)
+                steps.append(step_result("Create IP space", "success", {"id": result.get("id"), "name": name}))
+                return intent_response("success", f"IP space '{name}' created", steps, result=result)
 
         elif action == "get":
             if not resource_id:
@@ -2419,6 +2483,8 @@ def manage_network(
                 resp = client.get_address_block(resource_id)
             elif resource_type == "range":
                 resp = client.get_range(resource_id)
+            elif resource_type == "ip_space":
+                resp = client.get_ip_space(resource_id)
             else:
                 return intent_response("failed", f"Get not supported for '{resource_type}'.")
             result = resp.get("result", resp)
@@ -2444,6 +2510,8 @@ def manage_network(
                 resp = client.update_address_block(resource_id, updates)
             elif resource_type == "range":
                 resp = client.update_range(resource_id, updates)
+            elif resource_type == "ip_space":
+                resp = client.update_ip_space(resource_id, updates)
             else:
                 return intent_response("failed", f"Update not supported for '{resource_type}'.")
             result = resp.get("result", resp)
@@ -2463,6 +2531,8 @@ def manage_network(
                         resp = client.get_address_block(resource_id)
                     elif resource_type == "range":
                         resp = client.get_range(resource_id)
+                    elif resource_type == "ip_space":
+                        resp = client.get_ip_space(resource_id)
                     else:
                         resp = {}
                     result = resp.get("result", resp)
@@ -2486,6 +2556,8 @@ def manage_network(
                 client.delete_address_block(resource_id)
             elif resource_type == "range":
                 client.delete_range(resource_id)
+            elif resource_type == "ip_space":
+                client.delete_ip_space(resource_id)
             else:
                 return intent_response("failed", f"Delete not supported for '{resource_type}'.")
             steps.append(step_result(f"Delete {resource_type}", "success", {"id": resource_id}))
@@ -2530,30 +2602,52 @@ def manage_network(
 
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dns_zone(
-    action: Literal["create", "update", "delete", "list", "get", "sign", "unsign", "dnssec_status", "reorder"],
-    resource_type: Literal["auth_zone", "forward_zone", "dns_view", "rpz", "delegation"] = "auth_zone",
+    action: Literal["create", "update", "delete", "list", "get", "sign", "unsign", "dnssec_status", "reorder", "copy"],
+    resource_type: Literal[
+        "auth_zone",
+        "forward_zone",
+        "dns_view",
+        "rpz",
+        "delegation",
+        "dns_acl",
+        "auth_nsg",
+        "forward_nsg",
+        "dns_server",
+        "dns_host",
+        "dns_service",
+        "dns_global",
+    ] = "auth_zone",
     fqdn: str | None = None,
     name: str | None = None,
     primary_type: str | None = None,
     view: str | None = None,
+    target_view: str | None = None,
     forward_to: list[str] | None = None,
     delegation_servers: list[dict[str, Any]] | None = None,
     zone_ids: list[str] | None = None,
     disabled: bool | None = None,
     comment: str | None = None,
     resource_id: str | None = None,
+    tags: dict[str, Any] | None = None,
     dry_run: bool = True,
 ) -> dict:
     """
-    Manage DNS zones, views, RPZ, and delegations: create, update, delete, list, get, sign, unsign, check DNSSEC status, reorder.
+    Manage DNS zones, views, RPZ, delegations, ACLs, NSGs, servers, hosts, services, and global config.
     USE THIS for zone lifecycle operations. For DNS record CRUD use manage_dns_record(). For record creation use provision_dns().
 
     Quick routing guide:
-    - Authoritative zones: resource_type="auth_zone" (default) → create, list, get, delete, sign, unsign, dnssec_status
-    - Forward zones: resource_type="forward_zone" → create, list
+    - Authoritative zones: resource_type="auth_zone" (default) → create, list, get, delete, sign, unsign, dnssec_status, copy
+    - Forward zones: resource_type="forward_zone" → create, list, copy
     - DNS views: resource_type="dns_view" → create, list, get, update, delete
     - RPZ (Response Policy Zones): resource_type="rpz" → create, list, get, update, delete, reorder
     - Delegations: resource_type="delegation" → create, list, get, update, delete
+    - DNS ACLs: resource_type="dns_acl" → create, list, get, update, delete
+    - Auth NSGs: resource_type="auth_nsg" → create, list, get, update, delete
+    - Forward NSGs: resource_type="forward_nsg" → create, list, get, update, delete
+    - DNS Servers: resource_type="dns_server" → create, list, get, update, delete
+    - DNS Hosts: resource_type="dns_host" → list, get, update
+    - DNS Services: resource_type="dns_service" → list, get
+    - DNS Global: resource_type="dns_global" → get, update
 
     IMPORTANT: Delete runs in dry_run mode by default. sign/unsign/dnssec_status only work with auth_zone. reorder only works with rpz.
 
@@ -2561,15 +2655,17 @@ def manage_dns_zone(
         action: Operation to perform
         resource_type: DNS resource type to manage
         fqdn: Zone FQDN for create/delete (e.g., "example.com")
-        name: Name for dns_view create, or RPZ zone name
+        name: Name for dns_view/acl/nsg/server create
         primary_type: For auth/rpz zones — "cloud" or "external"
         view: DNS view name (optional)
+        target_view: Target view for copy action
         forward_to: List of forwarder IPs for forward zones
         delegation_servers: List of delegation server objects for delegation create
         zone_ids: List of zone IDs for sign/unsign/reorder operations
         disabled: Set zone disabled state (for update)
         comment: Description
-        resource_id: Resource ID for get/update/delete/dnssec_status
+        resource_id: Resource ID for get/update/delete/dnssec_status/copy
+        tags: Resource tags
         dry_run: If True (default), delete shows record count only. Set False to execute.
 
     Returns:
@@ -2577,14 +2673,13 @@ def manage_dns_zone(
 
     Examples:
         - manage_dns_zone(action="list") → all authoritative zones
-        - manage_dns_zone(action="list", resource_type="forward_zone") → all forward zones
-        - manage_dns_zone(action="list", resource_type="dns_view") → all DNS views
-        - manage_dns_zone(action="list", resource_type="rpz") → all RPZ zones
-        - manage_dns_zone(action="list", resource_type="delegation") → all delegations
-        - manage_dns_zone(action="create", fqdn="new.example.com", primary_type="cloud")
-        - manage_dns_zone(action="create", resource_type="dns_view", name="my-view")
+        - manage_dns_zone(action="list", resource_type="dns_acl") → all DNS ACLs
+        - manage_dns_zone(action="create", resource_type="dns_acl", name="internal-acl")
+        - manage_dns_zone(action="create", resource_type="auth_nsg", name="primary-nsg")
+        - manage_dns_zone(action="copy", resource_type="auth_zone", resource_id="dns/auth_zone/abc", target_view="external")
+        - manage_dns_zone(action="get", resource_type="dns_global")
+        - manage_dns_zone(action="list", resource_type="dns_service") → all DNS services
         - manage_dns_zone(action="sign", resource_type="auth_zone", zone_ids=["dns/auth_zone/abc"])
-        - manage_dns_zone(action="dnssec_status", resource_type="auth_zone", resource_id="dns/auth_zone/abc")
         - manage_dns_zone(action="reorder", resource_type="rpz", zone_ids=["id1", "id2"])
         - manage_dns_zone(action="delete", fqdn="old.example.com", dry_run=False)
     """
@@ -2598,7 +2693,23 @@ def manage_dns_zone(
             ],
         )
 
-    valid, err = validate_resource_type(resource_type, ["auth_zone", "forward_zone", "dns_view", "rpz", "delegation"])
+    valid, err = validate_resource_type(
+        resource_type,
+        [
+            "auth_zone",
+            "forward_zone",
+            "dns_view",
+            "rpz",
+            "delegation",
+            "dns_acl",
+            "auth_nsg",
+            "forward_nsg",
+            "dns_server",
+            "dns_host",
+            "dns_service",
+            "dns_global",
+        ],
+    )
     if not valid:
         return intent_response("failed", err)
 
@@ -2607,8 +2718,10 @@ def manage_dns_zone(
         return intent_response("failed", f"'{action}' is only supported for auth_zone, not {resource_type}.")
     if action == "reorder" and resource_type != "rpz":
         return intent_response("failed", "'reorder' is only supported for rpz.")
+    if action == "copy" and resource_type not in ("auth_zone", "forward_zone"):
+        return intent_response("failed", "'copy' is only supported for auth_zone and forward_zone.")
 
-    all_actions = ["create", "update", "delete", "list", "get", "sign", "unsign", "dnssec_status", "reorder"]
+    all_actions = ["create", "update", "delete", "list", "get", "sign", "unsign", "dnssec_status", "reorder", "copy"]
     valid, err = validate_action(action, all_actions)
     if not valid:
         return intent_response("failed", err)
@@ -2644,10 +2757,52 @@ def manage_dns_zone(
             "delete": lambda rid: client.delete_dns_delegation(rid),
             "update": lambda rid, u: client.update_dns_delegation(rid, u),
         },
+        "dns_acl": {
+            "list": lambda: client.list_dns_acls(limit=200),
+            "get": lambda rid: client.get_dns_acl(rid),
+            "delete": lambda rid: client.delete_dns_acl(rid),
+            "update": lambda rid, u: client.update_dns_acl(rid, u),
+        },
+        "auth_nsg": {
+            "list": lambda: client.list_auth_nsgs(limit=200),
+            "get": lambda rid: client.get_auth_nsg(rid),
+            "delete": lambda rid: client.delete_auth_nsg(rid),
+            "update": lambda rid, u: client.update_auth_nsg(rid, u),
+        },
+        "forward_nsg": {
+            "list": lambda: client.list_forward_nsgs(limit=200),
+            "get": lambda rid: client.get_forward_nsg(rid),
+            "delete": lambda rid: client.delete_forward_nsg(rid),
+            "update": lambda rid, u: client.update_forward_nsg(rid, u),
+        },
+        "dns_server": {
+            "list": lambda: client.list_dns_servers(limit=200),
+            "get": lambda rid: client.get_dns_server(rid),
+            "delete": lambda rid: client.delete_dns_server(rid),
+            "update": lambda rid, u: client.update_dns_server(rid, u),
+        },
+        "dns_host": {
+            "list": lambda: client.list_dns_hosts(limit=200),
+            "get": lambda rid: client.get_dns_host(rid),
+            "update": lambda rid, u: client.update_dns_host(rid, u),
+        },
+        "dns_service": {
+            "list": lambda: client.list_dns_services(limit=200),
+            "get": lambda rid: client.get_dns_service(rid),
+        },
+        "dns_global": {
+            "get": lambda rid: client.get_dns_global(),
+            "update": lambda rid, u: client.update_dns_global(rid, u),
+        },
     }
 
     try:
         if action == "list":
+            if resource_type == "dns_global":
+                resp = client.get_dns_global()
+                result = resp.get("result", resp)
+                steps.append(step_result("Get DNS global", "success", {}))
+                return intent_response("success", "Retrieved DNS global configuration", steps, result=result)
             resp = dispatch[resource_type]["list"]()
             items = extract_results(resp)
 
@@ -2703,12 +2858,20 @@ def manage_dns_zone(
                     for d in items
                 ]
             else:
-                result = []
+                # Generic list for dns_acl, auth_nsg, forward_nsg, dns_server, dns_host, dns_service
+                result = [
+                    {"id": i.get("id"), "name": i.get("name", ""), "comment": i.get("comment", "")} for i in items
+                ]
 
             steps.append(step_result(f"List {resource_type}s", "success", {"count": len(items)}))
             return intent_response("success", f"Found {len(items)} {resource_type}(s)", steps, result=result)
 
         elif action == "get":
+            if resource_type == "dns_global":
+                resp = client.get_dns_global()
+                result = resp.get("result", resp)
+                steps.append(step_result("Get DNS global", "success", {}))
+                return intent_response("success", "Retrieved DNS global configuration", steps, result=result)
             if not resource_id and not fqdn:
                 return intent_response("failed", "Get requires 'resource_id' or 'fqdn'.", steps)
 
@@ -2750,6 +2913,41 @@ def manage_dns_zone(
                 result = resp.get("result", resp)
                 steps.append(step_result("Create DNS view", "success", {"id": result.get("id"), "name": name}))
                 return intent_response("success", f"DNS view '{name}' created", steps, result=result)
+
+            elif resource_type == "dns_acl":
+                if not name:
+                    return intent_response("failed", "DNS ACL create requires 'name'.", steps)
+                resp = client.create_dns_acl(name=name, comment=comment)
+                result = resp.get("result", resp)
+                steps.append(step_result("Create DNS ACL", "success", {"id": result.get("id"), "name": name}))
+                return intent_response("success", f"DNS ACL '{name}' created", steps, result=result)
+
+            elif resource_type == "auth_nsg":
+                if not name:
+                    return intent_response("failed", "Auth NSG create requires 'name'.", steps)
+                resp = client.create_auth_nsg(name=name, comment=comment)
+                result = resp.get("result", resp)
+                steps.append(step_result("Create auth NSG", "success", {"id": result.get("id"), "name": name}))
+                return intent_response("success", f"Auth NSG '{name}' created", steps, result=result)
+
+            elif resource_type == "forward_nsg":
+                if not name:
+                    return intent_response("failed", "Forward NSG create requires 'name'.", steps)
+                resp = client.create_forward_nsg(name=name, comment=comment)
+                result = resp.get("result", resp)
+                steps.append(step_result("Create forward NSG", "success", {"id": result.get("id"), "name": name}))
+                return intent_response("success", f"Forward NSG '{name}' created", steps, result=result)
+
+            elif resource_type == "dns_server":
+                if not name:
+                    return intent_response("failed", "DNS server create requires 'name'.", steps)
+                resp = client.create_dns_server(name=name, comment=comment)
+                result = resp.get("result", resp)
+                steps.append(step_result("Create DNS server", "success", {"id": result.get("id"), "name": name}))
+                return intent_response("success", f"DNS server '{name}' created", steps, result=result)
+
+            elif resource_type in ("dns_host", "dns_service", "dns_global"):
+                return intent_response("failed", f"Create is not supported for '{resource_type}'.")
 
             elif resource_type == "delegation":
                 if not fqdn:
@@ -2808,10 +3006,8 @@ def manage_dns_zone(
                     return intent_response("success", f"Forward zone '{fqdn}' created", steps, result=result)
 
         elif action == "update":
-            if not resource_id:
-                return intent_response("failed", "Update requires 'resource_id'.", steps)
-            if resource_type not in dispatch or "update" not in dispatch[resource_type]:
-                return intent_response("failed", f"Update not supported for '{resource_type}'.", steps)
+            if resource_type in ("dns_service",):
+                return intent_response("failed", f"Update not supported for '{resource_type}'.")
             updates = {}
             if comment is not None:
                 updates["comment"] = comment
@@ -2819,14 +3015,30 @@ def manage_dns_zone(
                 updates["name"] = name
             if disabled is not None:
                 updates["disabled"] = disabled
+            if tags is not None:
+                updates["tags"] = tags
             if not updates:
-                return intent_response("failed", "No update fields provided. Set comment, name, or disabled.", steps)
-            resp = dispatch[resource_type]["update"](resource_id, updates)
+                return intent_response(
+                    "failed", "No update fields provided. Set comment, name, disabled, or tags.", steps
+                )
+            if resource_type == "dns_global":
+                if not resource_id:
+                    g = client.get_dns_global()
+                    resource_id = g.get("result", g).get("id", "")
+                resp = client.update_dns_global(resource_id, updates)
+            else:
+                if not resource_id:
+                    return intent_response("failed", "Update requires 'resource_id'.", steps)
+                if "update" not in dispatch.get(resource_type, {}):
+                    return intent_response("failed", f"Update not supported for '{resource_type}'.", steps)
+                resp = dispatch[resource_type]["update"](resource_id, updates)
             result = resp.get("result", resp) if resp else {}
             steps.append(step_result(f"Update {resource_type}", "success", {"id": resource_id, "updates": updates}))
             return intent_response("success", f"Updated {resource_type} {resource_id}", steps, result=result)
 
         elif action == "delete":
+            if resource_type in ("dns_host", "dns_service", "dns_global"):
+                return intent_response("failed", f"Delete is not supported for '{resource_type}'.")
             if not resource_id and not fqdn:
                 return intent_response("failed", "Delete requires 'resource_id' or 'fqdn'.", steps)
             if fqdn and not resource_id and resource_type in ("auth_zone", "forward_zone"):
@@ -2864,7 +3076,7 @@ def manage_dns_zone(
                     ],
                 )
 
-            if resource_type in ("dns_view", "rpz", "delegation") and "delete" in dispatch.get(resource_type, {}):
+            if "delete" in dispatch.get(resource_type, {}):
                 dispatch[resource_type]["delete"](resource_id)
                 steps.append(step_result(f"Delete {resource_type}", "success", {"id": resource_id}))
                 return intent_response("success", f"Deleted {resource_type} {resource_id}", steps)
@@ -2906,8 +3118,270 @@ def manage_dns_zone(
             steps.append(step_result("Reorder RPZ zones", "success", {"zone_ids": zone_ids}))
             return intent_response("success", f"Reordered {len(zone_ids)} RPZ zone(s)", steps, result=resp)
 
+        elif action == "copy":
+            if not resource_id:
+                return intent_response("failed", "Copy requires 'resource_id' (source zone ID).", steps)
+            if not target_view:
+                return intent_response("failed", "Copy requires 'target_view' (destination DNS view name).", steps)
+            if resource_type == "auth_zone":
+                resp = client.copy_auth_zone(zone_id=resource_id, target_view=target_view, comment=comment)
+            else:
+                resp = client.copy_forward_zone(zone_id=resource_id, target_view=target_view, comment=comment)
+            result = resp.get("result", resp)
+            steps.append(
+                step_result(f"Copy {resource_type}", "success", {"source": resource_id, "target_view": target_view})
+            )
+            return intent_response(
+                "success",
+                f"Copied {resource_type} {resource_id} to view '{target_view}'",
+                steps,
+                result=result,
+            )
+
     except Exception as e:
         return intent_response("failed", f"Failed to {action} {resource_type}: {e}", steps)
+
+
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
+def manage_rpz_policies(
+    action: Literal["list", "get", "create", "update", "delete"],
+    zone: str | None = None,
+    name: str | None = None,
+    resource_id: str | None = None,
+    rdata: dict[str, Any] | None = None,
+    comment: str | None = None,
+    disabled: bool | None = None,
+    dry_run: bool = True,
+) -> dict:
+    """
+    Manage RPZ (Response Policy Zone) rules — the individual DNS override entries within an RPZ zone.
+    For RPZ zone lifecycle (create/delete the zone itself) use manage_dns_zone(resource_type='rpz').
+
+    Args:
+        action: Operation to perform
+        zone: RPZ zone ID (required for create and list with zone filter)
+        name: Rule name / trigger FQDN (required for create)
+        resource_id: Rule ID for get/update/delete
+        rdata: Rule response data dict (required for create, e.g. {"type": "CNAME", "cname": "."})
+        comment: Description
+        disabled: Disable/enable rule (for update)
+        dry_run: If True (default), delete shows rule only. Set False to execute.
+
+    Returns:
+        RPZ rule operation result
+
+    Examples:
+        - manage_rpz_policies(action="list") → all RPZ rules
+        - manage_rpz_policies(action="list", zone="dns/rpz_zone/abc") → rules in a zone
+        - manage_rpz_policies(action="get", resource_id="dns/rpz_rule/xyz")
+        - manage_rpz_policies(action="create", zone="dns/rpz_zone/abc", name="bad.example.com", rdata={"type": "CNAME", "cname": "."})
+        - manage_rpz_policies(action="update", resource_id="dns/rpz_rule/xyz", disabled=True)
+        - manage_rpz_policies(action="delete", resource_id="dns/rpz_rule/xyz", dry_run=False)
+    """
+    if not client:
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
+
+    valid, err = validate_action(action, ["list", "get", "create", "update", "delete"])
+    if not valid:
+        return intent_response("failed", err)
+
+    steps = []
+
+    try:
+        if action == "list":
+            filter_str = None
+            if zone:
+                filter_str = f'zone=="{sanitize_filter(zone)}"'
+            resp = client.list_rpz_rules(filter=filter_str, limit=200)
+            items = extract_results(resp)
+            result = [
+                {
+                    "id": r.get("id"),
+                    "name": r.get("name", ""),
+                    "zone": r.get("zone", ""),
+                    "disabled": r.get("disabled", False),
+                    "comment": r.get("comment", ""),
+                }
+                for r in items
+            ]
+            steps.append(step_result("List RPZ rules", "success", {"count": len(items)}))
+            return intent_response("success", f"Found {len(items)} RPZ rule(s)", steps, result=result)
+
+        elif action == "get":
+            if not resource_id:
+                return intent_response("failed", "Get requires 'resource_id'.", steps)
+            resp = client.get_rpz_rule(resource_id)
+            result = resp.get("result", resp)
+            steps.append(step_result("Get RPZ rule", "success", {"id": resource_id}))
+            return intent_response("success", f"Retrieved RPZ rule {resource_id}", steps, result=result)
+
+        elif action == "create":
+            if not zone:
+                return intent_response("failed", "Create requires 'zone' (RPZ zone ID).", steps)
+            if not name:
+                return intent_response("failed", "Create requires 'name' (trigger FQDN).", steps)
+            if not rdata:
+                return intent_response("failed", "Create requires 'rdata' (response data dict).", steps)
+            resp = client.create_rpz_rule(name=name, zone=zone, rdata=rdata, comment=comment)
+            result = resp.get("result", resp)
+            steps.append(step_result("Create RPZ rule", "success", {"id": result.get("id"), "name": name}))
+            return intent_response("success", f"RPZ rule '{name}' created in zone {zone}", steps, result=result)
+
+        elif action == "update":
+            if not resource_id:
+                return intent_response("failed", "Update requires 'resource_id'.", steps)
+            updates = {}
+            if comment is not None:
+                updates["comment"] = comment
+            if name is not None:
+                updates["name"] = name
+            if disabled is not None:
+                updates["disabled"] = disabled
+            if rdata is not None:
+                updates["rdata"] = rdata
+            if not updates:
+                return intent_response(
+                    "failed", "No update fields provided. Set comment, name, disabled, or rdata.", steps
+                )
+            resp = client.update_rpz_rule(resource_id, updates)
+            result = resp.get("result", resp)
+            steps.append(step_result("Update RPZ rule", "success", {"id": resource_id}))
+            return intent_response("success", f"Updated RPZ rule {resource_id}", steps, result=result)
+
+        elif action == "delete":
+            if not resource_id:
+                return intent_response("failed", "Delete requires 'resource_id'.", steps)
+            if dry_run:
+                try:
+                    resp = client.get_rpz_rule(resource_id)
+                    result = resp.get("result", resp)
+                    steps.append(step_result("Dry run: inspect RPZ rule", "success", result))
+                except Exception as e:
+                    steps.append(step_result("Dry run: inspect RPZ rule", "failed", error=str(e)))
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would delete RPZ rule {resource_id}",
+                    steps,
+                    result={"resource_id": resource_id},
+                    warnings=["This is a DRY RUN. Set dry_run=False to actually delete."],
+                    next_actions=[
+                        f"Execute: manage_rpz_policies(action='delete', resource_id='{resource_id}', dry_run=False)"
+                    ],
+                )
+            client.delete_rpz_rule(resource_id)
+            steps.append(step_result("Delete RPZ rule", "success", {"id": resource_id}))
+            return intent_response("success", f"Deleted RPZ rule {resource_id}", steps)
+
+    except Exception as e:
+        return intent_response("failed", f"Failed to {action} RPZ rule: {e}", steps)
+
+
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
+def manage_dnssec(
+    action: Literal["sign", "unsign", "status", "export_trust_anchors", "delete_key", "import_keyset"],
+    zone_id: str | None = None,
+    zone_ids: list[str] | None = None,
+    key_id: str | None = None,
+    keyset: dict[str, Any] | None = None,
+) -> dict:
+    """
+    Manage DNSSEC key lifecycle for authoritative zones: sign, unsign, check status, export trust anchors,
+    delete keys, and import keysets.
+    For zone management use manage_dns_zone(). For RPZ rules use manage_rpz_policies().
+
+    Args:
+        action: DNSSEC operation to perform
+        zone_id: Single zone ID for status/delete_key/import_keyset operations
+        zone_ids: List of zone IDs for sign/unsign/export_trust_anchors operations
+        key_id: DNSSEC key ID for delete_key
+        keyset: Keyset dict for import_keyset
+
+    Returns:
+        DNSSEC operation result
+
+    Examples:
+        - manage_dnssec(action="sign", zone_ids=["dns/auth_zone/abc", "dns/auth_zone/def"])
+        - manage_dnssec(action="unsign", zone_ids=["dns/auth_zone/abc"])
+        - manage_dnssec(action="status", zone_id="dns/auth_zone/abc")
+        - manage_dnssec(action="export_trust_anchors", zone_ids=["dns/auth_zone/abc"])
+        - manage_dnssec(action="delete_key", zone_id="dns/auth_zone/abc", key_id="dns/auth_zone/abc/dnssec_key/k123")
+        - manage_dnssec(action="import_keyset", zone_id="dns/auth_zone/abc", keyset={"keys": [...]})
+    """
+    if not client:
+        return intent_response(
+            "failed",
+            "Infoblox client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=[
+                "Run check_api_health() to verify connectivity",
+                "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
+
+    valid, err = validate_action(
+        action, ["sign", "unsign", "status", "export_trust_anchors", "delete_key", "import_keyset"]
+    )
+    if not valid:
+        return intent_response("failed", err)
+
+    steps = []
+
+    try:
+        if action == "sign":
+            if not zone_ids:
+                return intent_response("failed", "Sign requires 'zone_ids' (list of auth zone IDs).", steps)
+            resp = client.sign_auth_zone(zone_ids)
+            steps.append(step_result("Sign zones", "success", {"zone_ids": zone_ids}))
+            return intent_response("success", f"Signed {len(zone_ids)} zone(s)", steps, result=resp)
+
+        elif action == "unsign":
+            if not zone_ids:
+                return intent_response("failed", "Unsign requires 'zone_ids'.", steps)
+            resp = client.unsign_auth_zone(zone_ids)
+            steps.append(step_result("Unsign zones", "success", {"zone_ids": zone_ids}))
+            return intent_response("success", f"Unsigned {len(zone_ids)} zone(s)", steps, result=resp)
+
+        elif action == "status":
+            if not zone_id:
+                return intent_response("failed", "Status requires 'zone_id'.", steps)
+            resp = client.get_dnssec_key_status(zone_id)
+            result = resp.get("result", resp)
+            steps.append(step_result("Get DNSSEC status", "success", {"zone_id": zone_id}))
+            return intent_response("success", f"DNSSEC status for {zone_id}", steps, result=result)
+
+        elif action == "export_trust_anchors":
+            if not zone_ids:
+                return intent_response("failed", "export_trust_anchors requires 'zone_ids'.", steps)
+            resp = client.export_trust_anchors(zone_ids)
+            result = resp.get("result", resp)
+            steps.append(step_result("Export trust anchors", "success", {"zone_ids": zone_ids}))
+            return intent_response(
+                "success", f"Exported trust anchors for {len(zone_ids)} zone(s)", steps, result=result
+            )
+
+        elif action == "delete_key":
+            if not zone_id or not key_id:
+                return intent_response("failed", "delete_key requires 'zone_id' and 'key_id'.", steps)
+            resp = client.delete_dnssec_key(zone_id=zone_id, key_id=key_id)
+            steps.append(step_result("Delete DNSSEC key", "success", {"zone_id": zone_id, "key_id": key_id}))
+            return intent_response("success", f"Deleted DNSSEC key {key_id} from {zone_id}", steps, result=resp)
+
+        elif action == "import_keyset":
+            if not zone_id or not keyset:
+                return intent_response("failed", "import_keyset requires 'zone_id' and 'keyset'.", steps)
+            resp = client.import_keyset(zone_id=zone_id, keyset=keyset)
+            result = resp.get("result", resp)
+            steps.append(step_result("Import keyset", "success", {"zone_id": zone_id}))
+            return intent_response("success", f"Imported keyset into {zone_id}", steps, result=result)
+
+    except Exception as e:
+        return intent_response("failed", f"Failed to {action} DNSSEC: {e}", steps)
 
 
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
@@ -3095,8 +3569,21 @@ def manage_dns_record(
 
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dhcp(
-    resource_type: Literal["ha_group", "option_code", "hardware_filter", "option_filter", "hardware"],
-    action: Literal["create", "update", "delete", "get", "list"],
+    resource_type: Literal[
+        "ha_group",
+        "option_code",
+        "hardware_filter",
+        "option_filter",
+        "hardware",
+        "dhcp_server",
+        "option_group",
+        "option_space",
+        "mac_item",
+        "dhcp_host",
+        "dhcp_global",
+        "config_profile",
+    ],
+    action: Literal["create", "update", "delete", "get", "list", "bulk_create", "link", "delink"],
     name: str | None = None,
     resource_id: str | None = None,
     mode: str | None = None,
@@ -3106,15 +3593,19 @@ def manage_dhcp(
     protocol: str | None = None,
     mac_address: str | None = None,
     comment: str | None = None,
+    items: list[dict[str, Any]] | None = None,
+    object_id: str | None = None,
+    tags: dict[str, Any] | None = None,
     dry_run: bool = True,
 ) -> dict:
     """
-    Manage DHCP configuration: HA groups, option codes, hardware filters, option filters, and hardware entries.
+    Manage DHCP configuration: HA groups, option codes, hardware filters, option filters, hardware,
+    DHCP servers, option groups/spaces, MAC address items, DHCP hosts, global config, and config profiles.
     USE THIS for DHCP-specific CRUD. For IP reservations use manage_ip_reservation(). For network topology use manage_network().
 
     Args:
         resource_type: Type of DHCP resource to manage
-        action: Operation to perform
+        action: Operation to perform (bulk_create for mac_item; link/delink for config_profile)
         name: Resource name
         resource_id: Resource ID for get/update/delete
         mode: HA group mode (e.g., "active-active", "active-passive") — for ha_group create
@@ -3122,8 +3613,11 @@ def manage_dhcp(
         code: DHCP option code number — for option_code create
         option_type: Option code type (e.g., "string", "uint8") — for option_code create
         protocol: Protocol for hardware filters (e.g., "dhcpv4") — for hardware_filter create
-        mac_address: MAC address — for hardware create
+        mac_address: MAC address — for hardware/mac_item create
         comment: Description
+        items: List of MAC item dicts for bulk_create (each: {"mac": "AA:BB:CC:DD:EE:FF"})
+        object_id: Object ID for config_profile list/link/delink (e.g., subnet ID)
+        tags: Resource tags
         dry_run: If True (default), delete shows resource only. Set False to execute.
 
     Returns:
@@ -3131,9 +3625,11 @@ def manage_dhcp(
 
     Examples:
         - manage_dhcp(resource_type="ha_group", action="list")
-        - manage_dhcp(resource_type="option_code", action="list")
-        - manage_dhcp(resource_type="ha_group", action="create", name="dc1-ha", mode="active-active", hosts=[...])
-        - manage_dhcp(resource_type="hardware", action="create", mac_address="AA:BB:CC:DD:EE:FF", name="server-01")
+        - manage_dhcp(resource_type="dhcp_server", action="list")
+        - manage_dhcp(resource_type="option_group", action="create", name="my-group")
+        - manage_dhcp(resource_type="mac_item", action="bulk_create", items=[{"mac": "AA:BB:CC:DD:EE:FF"}])
+        - manage_dhcp(resource_type="config_profile", action="link", resource_id="dhcp/config_profile/abc", object_id="ipam/subnet/xyz")
+        - manage_dhcp(resource_type="dhcp_global", action="get")
         - manage_dhcp(resource_type="option_code", action="delete", resource_id="dhcp/option_code/123", dry_run=False)
     """
     if not client:
@@ -3147,12 +3643,26 @@ def manage_dhcp(
         )
 
     valid, err = validate_resource_type(
-        resource_type, ["ha_group", "option_code", "hardware_filter", "option_filter", "hardware"]
+        resource_type,
+        [
+            "ha_group",
+            "option_code",
+            "hardware_filter",
+            "option_filter",
+            "hardware",
+            "dhcp_server",
+            "option_group",
+            "option_space",
+            "mac_item",
+            "dhcp_host",
+            "dhcp_global",
+            "config_profile",
+        ],
     )
     if not valid:
         return intent_response("failed", err)
 
-    valid, err = validate_action(action, ["create", "update", "delete", "get", "list"])
+    valid, err = validate_action(action, ["create", "update", "delete", "get", "list", "bulk_create", "link", "delink"])
     if not valid:
         return intent_response("failed", err)
 
@@ -3190,14 +3700,66 @@ def manage_dhcp(
             "delete": lambda rid: client.delete_hardware(rid),
             "update": lambda rid, u: client.update_hardware(rid, u),
         },
+        "dhcp_server": {
+            "list": lambda: client.list_dhcp_servers(limit=100),
+            "get": lambda rid: client.get_dhcp_server(rid),
+            "delete": lambda rid: client.delete_dhcp_server(rid),
+            "update": lambda rid, u: client.update_dhcp_server(rid, u),
+        },
+        "option_group": {
+            "list": lambda: client.list_option_groups(limit=100),
+            "get": lambda rid: client.get_option_group(rid),
+            "delete": lambda rid: client.delete_option_group(rid),
+            "update": lambda rid, u: client.update_option_group(rid, u),
+        },
+        "option_space": {
+            "list": lambda: client.list_option_spaces(limit=100),
+            "get": lambda rid: client.get_option_space(rid),
+            "delete": lambda rid: client.delete_option_space(rid),
+            "update": lambda rid, u: client.update_option_space(rid, u),
+        },
+        "mac_item": {
+            "list": lambda: client.list_mac_address_items(limit=200),
+            "get": lambda rid: client.get_mac_address_item(rid),
+            "delete": lambda rid: client.delete_mac_address_item(rid),
+            "update": lambda rid, u: client.update_mac_address_item(rid, u),
+        },
+        "dhcp_host": {
+            "list": lambda: client.list_dhcp_hosts(limit=100),
+            "get": lambda rid: client.get_dhcp_host(rid),
+            "update": lambda rid, u: client.update_dhcp_host(rid, u),
+        },
+        "dhcp_global": {
+            "get": lambda rid: client.get_dhcp_global(),
+            "update": lambda rid, u: client.update_dhcp_global(rid, u),
+        },
+        "config_profile": {
+            "list": lambda: client.list_config_profiles(object_id=object_id or "", limit=100),
+        },
     }
 
     try:
         if action == "list":
+            if resource_type == "dhcp_global":
+                resp = client.get_dhcp_global()
+                result = resp.get("result", resp)
+                steps.append(step_result("Get DHCP global", "success", {}))
+                return intent_response("success", "Retrieved DHCP global configuration", steps, result=result)
+            if resource_type == "config_profile":
+                if not object_id:
+                    return intent_response(
+                        "failed", "config_profile list requires 'object_id' (e.g., subnet ID).", steps
+                    )
+                resp = client.list_config_profiles(object_id=object_id, limit=100)
+                items_list = extract_results(resp)
+                steps.append(step_result("List config profiles", "success", {"count": len(items_list)}))
+                return intent_response(
+                    "success", f"Found {len(items_list)} config profile(s)", steps, result=items_list
+                )
             resp = dispatch[resource_type]["list"]()
-            items = extract_results(resp)
+            items_list = extract_results(resp)
             result = []
-            for item in items:
+            for item in items_list:
                 entry = {"id": item.get("id"), "name": item.get("name", "")}
                 if resource_type == "ha_group":
                     entry["mode"] = item.get("mode", "")
@@ -3206,20 +3768,29 @@ def manage_dhcp(
                     entry["type"] = item.get("type", "")
                 elif resource_type == "hardware":
                     entry["address"] = item.get("address", "")
+                elif resource_type == "mac_item":
+                    entry["mac"] = item.get("mac", "")
                 entry["comment"] = item.get("comment", "")
                 result.append(entry)
-            steps.append(step_result(f"List {resource_type}s", "success", {"count": len(items)}))
-            return intent_response("success", f"Found {len(items)} {resource_type}(s)", steps, result=result)
+            steps.append(step_result(f"List {resource_type}s", "success", {"count": len(items_list)}))
+            return intent_response("success", f"Found {len(items_list)} {resource_type}(s)", steps, result=result)
 
         elif action == "get":
+            if resource_type == "dhcp_global":
+                resp = client.get_dhcp_global()
+                result = resp.get("result", resp)
+                steps.append(step_result("Get DHCP global", "success", {}))
+                return intent_response("success", "Retrieved DHCP global configuration", steps, result=result)
+            if resource_type == "config_profile":
+                return intent_response("failed", "Use action='list' with object_id for config_profile.")
             if not resource_id:
-                # Try name lookup
-                if name:
+                # Try name lookup (not available for dhcp_host — no list with get dispatch)
+                if name and "list" in dispatch.get(resource_type, {}):
                     resp = dispatch[resource_type]["list"]()
-                    items = extract_results(resp)
-                    matches = [i for i in items if i.get("name", "").lower() == name.lower()]
+                    items_list = extract_results(resp)
+                    matches = [i for i in items_list if i.get("name", "").lower() == name.lower()]
                     if not matches:
-                        matches = [i for i in items if name.lower() in i.get("name", "").lower()]
+                        matches = [i for i in items_list if name.lower() in i.get("name", "").lower()]
                     if matches:
                         resource_id = matches[0].get("id")
                         steps.append(step_result(f"Resolve {resource_type} name", "success", {"id": resource_id}))
@@ -3258,14 +3829,37 @@ def manage_dhcp(
                 if not valid_mac:
                     return intent_response("failed", mac_err)
                 resp = client.create_hardware(address=mac_address, name=name, comment=comment)
+            elif resource_type == "dhcp_server":
+                if not name:
+                    return intent_response("failed", "DHCP server create requires 'name'.", steps)
+                resp = client.create_dhcp_server(name=name, comment=comment)
+            elif resource_type == "option_group":
+                if not name:
+                    return intent_response("failed", "Option group create requires 'name'.", steps)
+                resp = client.create_option_group(name=name, comment=comment)
+            elif resource_type == "option_space":
+                if not name:
+                    return intent_response("failed", "Option space create requires 'name'.", steps)
+                resp = client.create_option_space(name=name, comment=comment)
+            elif resource_type == "mac_item":
+                if not mac_address:
+                    return intent_response("failed", "MAC item create requires 'mac_address'.", steps)
+                valid_mac, mac_err = validate_mac(mac_address)
+                if not valid_mac:
+                    return intent_response("failed", mac_err)
+                resp = client.create_mac_address_item(mac_address=mac_address, comment=comment)
+            elif resource_type in ("dhcp_host", "dhcp_global", "config_profile"):
+                return intent_response("failed", f"Create is not supported for '{resource_type}'.")
+            else:
+                return intent_response("failed", f"Create not implemented for '{resource_type}'.")
 
             result = resp.get("result", resp)
             steps.append(step_result(f"Create {resource_type}", "success", {"id": result.get("id")}))
             return intent_response("success", f"Created {resource_type} '{name or mac_address}'", steps, result=result)
 
         elif action == "update":
-            if not resource_id:
-                return intent_response("failed", "Update requires 'resource_id'.", steps)
+            if resource_type == "config_profile":
+                return intent_response("failed", "Use action='link' or 'delink' for config_profile.")
             updates = {}
             if comment is not None:
                 updates["comment"] = comment
@@ -3273,14 +3867,29 @@ def manage_dhcp(
                 updates["name"] = name
             if mode is not None:
                 updates["mode"] = mode
+            if tags is not None:
+                updates["tags"] = tags
             if not updates:
                 return intent_response("failed", "No update fields provided.", steps)
-            resp = dispatch[resource_type]["update"](resource_id, updates)
+            if resource_type == "dhcp_global":
+                # global update — resource_id is the global config ID or fetched first
+                if not resource_id:
+                    g = client.get_dhcp_global()
+                    resource_id = g.get("result", g).get("id", "")
+                resp = client.update_dhcp_global(resource_id, updates)
+            else:
+                if not resource_id:
+                    return intent_response("failed", "Update requires 'resource_id'.", steps)
+                if "update" not in dispatch.get(resource_type, {}):
+                    return intent_response("failed", f"Update not supported for '{resource_type}'.")
+                resp = dispatch[resource_type]["update"](resource_id, updates)
             result = resp.get("result", resp)
             steps.append(step_result(f"Update {resource_type}", "success", {"id": resource_id}))
             return intent_response("success", f"Updated {resource_type} {resource_id}", steps, result=result)
 
         elif action == "delete":
+            if resource_type in ("dhcp_host", "dhcp_global", "config_profile"):
+                return intent_response("failed", f"Delete is not supported for '{resource_type}'.")
             if not resource_id:
                 return intent_response("failed", "Delete requires 'resource_id'.", steps)
             if dry_run:
@@ -3303,6 +3912,45 @@ def manage_dhcp(
             dispatch[resource_type]["delete"](resource_id)
             steps.append(step_result(f"Delete {resource_type}", "success", {"id": resource_id}))
             return intent_response("success", f"Deleted {resource_type} {resource_id}", steps)
+
+        elif action == "bulk_create":
+            if resource_type != "mac_item":
+                return intent_response("failed", "bulk_create is only supported for resource_type='mac_item'.")
+            if not items:
+                return intent_response("failed", "bulk_create requires 'items' list of MAC item dicts.", steps)
+            resp = client.bulk_create_mac_address_items(items)
+            result = resp.get("result", resp)
+            created = result if isinstance(result, list) else []
+            steps.append(step_result("Bulk create MAC items", "success", {"count": len(created)}))
+            return intent_response("success", f"Bulk created {len(created)} MAC address item(s)", steps, result=result)
+
+        elif action == "link":
+            if resource_type != "config_profile":
+                return intent_response("failed", "link is only supported for resource_type='config_profile'.")
+            if not resource_id or not object_id:
+                return intent_response("failed", "link requires 'resource_id' (profile ID) and 'object_id'.", steps)
+            resp = client.link_config_profile(profile_id=resource_id, object_id=object_id)
+            result = resp.get("result", resp)
+            steps.append(
+                step_result("Link config profile", "success", {"profile_id": resource_id, "object_id": object_id})
+            )
+            return intent_response(
+                "success", f"Linked config profile {resource_id} to {object_id}", steps, result=result
+            )
+
+        elif action == "delink":
+            if resource_type != "config_profile":
+                return intent_response("failed", "delink is only supported for resource_type='config_profile'.")
+            if not resource_id or not object_id:
+                return intent_response("failed", "delink requires 'resource_id' (profile ID) and 'object_id'.", steps)
+            resp = client.delink_config_profile(profile_id=resource_id, object_id=object_id)
+            result = resp.get("result", resp)
+            steps.append(
+                step_result("Delink config profile", "success", {"profile_id": resource_id, "object_id": object_id})
+            )
+            return intent_response(
+                "success", f"Delinked config profile {resource_id} from {object_id}", steps, result=result
+            )
 
     except Exception as e:
         return intent_response("failed", f"Failed to {action} {resource_type}: {e}", steps)
@@ -3573,9 +4221,21 @@ def manage_ip_reservation(
                         resource_id = items[0].get("id")
                         steps.append(step_result("Lookup address", "success", {"id": resource_id}))
                     else:
-                        return intent_response("failed", f"No address record found for '{address}'", steps)
+                        # Also try IPAM hosts
+                        host_resp = client.list_ipam_hosts(filter=f'address=="{sanitize_filter(address)}"')
+                        hosts = extract_results(host_resp)
+                        if hosts:
+                            resource_id = hosts[0].get("id")
+                            steps.append(step_result("Lookup IPAM host", "success", {"id": resource_id}))
+                        else:
+                            return intent_response("failed", f"No address or IPAM host found for '{address}'", steps)
                 else:
                     return intent_response("failed", "Get requires 'resource_id' or 'address'.", steps)
+            if resource_id.startswith("ipam/host/"):
+                resp = client.get_ipam_host(resource_id)
+                result = resp.get("result", resp)
+                steps.append(step_result("Get IPAM host", "success", {"id": resource_id}))
+                return intent_response("success", f"Retrieved IPAM host {resource_id}", steps, result=result)
             resp = client.get_fixed_address(resource_id)
             result = resp.get("result", resp)
             steps.append(step_result("Get fixed address", "success", {"id": resource_id}))
@@ -3593,6 +4253,11 @@ def manage_ip_reservation(
                 updates["match_value"] = mac
             if not updates:
                 return intent_response("failed", "No update fields provided.", steps)
+            if resource_id.startswith("ipam/host/"):
+                resp = client.update_ipam_host(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update IPAM host", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated IPAM host {resource_id}", steps, result=result)
             resp = client.update_fixed_address(resource_id, updates)
             result = resp.get("result", resp)
             steps.append(step_result("Update reservation", "success", {"id": resource_id}))
@@ -3634,6 +4299,12 @@ def manage_ip_reservation(
                     ],
                 )
 
+            if resource_id.startswith("ipam/host/"):
+                client.delete_ipam_host(resource_id)
+                steps.append(step_result("Delete IPAM host", "success", {"id": resource_id}))
+                return intent_response(
+                    "success", f"Deleted IPAM host {address or resource_id}", steps, warnings=warnings
+                )
             client.delete_fixed_address(resource_id)
             steps.append(step_result("Release IP reservation", "success", {"id": resource_id}))
             return intent_response(
@@ -3649,7 +4320,16 @@ def manage_ip_reservation(
 
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_security_policy(
-    resource_type: Literal["policy", "named_list", "app_filter", "internal_domains", "access_code", "category_filter"],
+    resource_type: Literal[
+        "policy",
+        "named_list",
+        "app_filter",
+        "internal_domains",
+        "access_code",
+        "category_filter",
+        "policy_rule",
+        "network_list",
+    ],
     action: Literal["create", "update", "delete", "list", "get", "add_items", "remove_items"],
     name: str | None = None,
     resource_id: str | None = None,
@@ -3713,18 +4393,26 @@ def manage_security_policy(
         )
 
     valid, err = validate_resource_type(
-        resource_type, ["policy", "named_list", "app_filter", "internal_domains", "access_code", "category_filter"]
+        resource_type,
+        [
+            "policy",
+            "named_list",
+            "app_filter",
+            "internal_domains",
+            "access_code",
+            "category_filter",
+            "policy_rule",
+            "network_list",
+        ],
     )
     if not valid:
         return intent_response("failed", err)
 
-    # Policies are read-only
-    if resource_type == "policy" and action not in ("list", "get"):
-        return intent_response("failed", "Security policies are read-only via API. Use 'list' or 'get' only.")
-
-    # add_items/remove_items only for named_list
-    if action in ("add_items", "remove_items") and resource_type != "named_list":
-        return intent_response("failed", f"'{action}' is only supported for named_list, not {resource_type}.")
+    # add_items/remove_items only for named_list and network_list
+    if action in ("add_items", "remove_items") and resource_type not in ("named_list", "network_list"):
+        return intent_response(
+            "failed", f"'{action}' is only supported for named_list and network_list, not {resource_type}."
+        )
 
     valid, err = validate_action(action, ["create", "update", "delete", "list", "get", "add_items", "remove_items"])
     if not valid:
@@ -3791,6 +4479,21 @@ def manage_security_policy(
                     }
                     for cf in items_list
                 ]
+            elif resource_type == "policy_rule":
+                if not resource_id:
+                    return intent_response("failed", "policy_rule list requires 'resource_id' (policy ID).", steps)
+                resp = atcfw_client.list_security_policy_rules(resource_id)
+                items_list = extract_results(resp)
+                result = [
+                    {"id": r.get("id"), "action": r.get("action"), "priority": r.get("priority")} for r in items_list
+                ]
+            elif resource_type == "network_list":
+                resp = atcfw_client.list_network_lists(limit=100)
+                items_list = extract_results(resp)
+                result = [
+                    {"id": n.get("id"), "name": n.get("name"), "item_count": len(n.get("items", []))}
+                    for n in items_list
+                ]
             steps.append(step_result(f"List {resource_type}s", "success", {"count": len(items_list)}))
             return intent_response("success", f"Found {len(items_list)} {resource_type}(s)", steps, result=result)
 
@@ -3801,12 +4504,23 @@ def manage_security_policy(
                 resp = atcfw_client.get_security_policy(resource_id)
             elif resource_type == "category_filter":
                 resp = atcfw_client.get_category_filter(resource_id)
+            elif resource_type == "app_filter":
+                resp = atcfw_client.get_application_filter(resource_id)
+            elif resource_type == "internal_domains":
+                resp = atcfw_client.get_internal_domain_list(resource_id)
+            elif resource_type == "access_code":
+                resp = atcfw_client.get_access_code(resource_id)
+            elif resource_type == "policy_rule":
+                if "|" not in resource_id:
+                    return intent_response(
+                        "failed", "policy_rule get requires resource_id in format 'policy_id|rule_id'.", steps
+                    )
+                policy_id, rule_id = resource_id.split("|", 1)
+                resp = atcfw_client.get_security_policy_rule(policy_id, rule_id)
+            elif resource_type == "network_list":
+                resp = atcfw_client.get_network_list(resource_id)
             else:
-                return intent_response(
-                    "failed",
-                    "Get by ID only supported for 'policy' and 'category_filter'. Use 'list' + filter for others.",
-                    steps,
-                )
+                return intent_response("failed", f"Get not supported for resource_type '{resource_type}'.", steps)
             result = resp.get("result", resp)
             steps.append(step_result(f"Get {resource_type}", "success", {"id": resource_id}))
             return intent_response("success", f"Retrieved {resource_type}", steps, result=result)
@@ -3847,6 +4561,50 @@ def manage_security_policy(
                 resp = atcfw_client.create_category_filter(
                     name=name, categories=categories, description=description or ""
                 )
+            elif resource_type == "policy":
+                if dry_run:
+                    return intent_response(
+                        "success",
+                        f"DRY RUN: Would create security policy '{name}'",
+                        steps,
+                        result={"mode": "DRY RUN", "name": name, "rules": rules or []},
+                        warnings=["Set dry_run=False to create."],
+                        next_actions=[
+                            f"Execute: manage_security_policy(resource_type='policy', action='create', name='{name}', dry_run=False)"
+                        ],
+                    )
+                resp = atcfw_client.create_security_policy(name=name, rules=rules or [])
+            elif resource_type == "policy_rule":
+                if not resource_id:
+                    return intent_response("failed", "policy_rule create requires 'resource_id' (policy ID).", steps)
+                if not rules or len(rules) != 1:
+                    return intent_response(
+                        "failed", "policy_rule create requires 'rules' with exactly one rule dict.", steps
+                    )
+                if dry_run:
+                    return intent_response(
+                        "success",
+                        f"DRY RUN: Would create rule in policy {resource_id}",
+                        steps,
+                        result={"mode": "DRY RUN", "policy_id": resource_id, "rule": rules[0]},
+                        warnings=["Set dry_run=False to create."],
+                    )
+                resp = atcfw_client.create_security_policy_rule(resource_id, rules[0])
+            elif resource_type == "network_list":
+                if dry_run:
+                    return intent_response(
+                        "success",
+                        f"DRY RUN: Would create network list '{name}'",
+                        steps,
+                        result={"mode": "DRY RUN", "name": name, "items": items or []},
+                        warnings=["Set dry_run=False to create."],
+                        next_actions=[
+                            f"Execute: manage_security_policy(resource_type='network_list', action='create', name='{name}', dry_run=False)"
+                        ],
+                    )
+                resp = atcfw_client.create_network_list(name=name, items=items or [])
+            else:
+                return intent_response("failed", f"Create not supported for resource_type '{resource_type}'.", steps)
             result = resp.get("result", resp)
             steps.append(step_result(f"Create {resource_type}", "success", {"id": result.get("id")}))
             return intent_response("success", f"Created {resource_type} '{name}'", steps, result=result)
@@ -3881,53 +4639,137 @@ def manage_security_policy(
                 result = resp.get("result", resp)
                 steps.append(step_result("Update category filter", "success", {"id": resource_id}))
                 return intent_response("success", f"Updated category filter {resource_id}", steps, result=result)
+            elif resource_type == "policy":
+                updates = {k: v for k, v in {"name": name, "description": description}.items() if v is not None}
+                if rules is not None:
+                    updates["rules"] = rules
+                if not updates:
+                    return intent_response("failed", "No update fields provided for policy.", steps)
+                resp = atcfw_client.update_security_policy(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update security policy", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated security policy {resource_id}", steps, result=result)
+            elif resource_type == "policy_rule":
+                if "|" not in resource_id:
+                    return intent_response(
+                        "failed", "policy_rule update requires resource_id in format 'policy_id|rule_id'.", steps
+                    )
+                policy_id, rule_id = resource_id.split("|", 1)
+                if not rules or len(rules) != 1:
+                    return intent_response(
+                        "failed", "policy_rule update requires 'rules' with exactly one rule dict.", steps
+                    )
+                resp = atcfw_client.update_security_policy_rule(policy_id, rule_id, rules[0])
+                result = resp.get("result", resp)
+                steps.append(step_result("Update policy rule", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated policy rule {resource_id}", steps, result=result)
+            elif resource_type == "network_list":
+                updates = {}
+                if name:
+                    updates["name"] = name
+                if items is not None:
+                    updates["items"] = items
+                if description is not None:
+                    updates["description"] = description
+                if not updates:
+                    return intent_response("failed", "No update fields provided for network list.", steps)
+                resp = atcfw_client.update_network_list(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update network list", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated network list {resource_id}", steps, result=result)
+            elif resource_type == "app_filter":
+                updates = {k: v for k, v in {"name": name, "description": description}.items() if v is not None}
+                if criteria is not None:
+                    updates["criteria"] = criteria
+                resp = atcfw_client.update_application_filter(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update app filter", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated app filter {resource_id}", steps, result=result)
+            elif resource_type == "internal_domains":
+                updates = {}
+                if name:
+                    updates["name"] = name
+                if items is not None:
+                    updates["internal_domains"] = items
+                resp = atcfw_client.update_internal_domain_list(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update internal domain list", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated internal domain list {resource_id}", steps, result=result)
+            elif resource_type == "access_code":
+                updates = {
+                    k: v
+                    for k, v in {"name": name, "activation": activation, "expiration": expiration}.items()
+                    if v is not None
+                }
+                if rules is not None:
+                    updates["rules"] = rules
+                resp = atcfw_client.update_access_code(resource_id, updates)
+                result = resp.get("result", resp)
+                steps.append(step_result("Update access code", "success", {"id": resource_id}))
+                return intent_response("success", f"Updated access code {resource_id}", steps, result=result)
             else:
-                return intent_response(
-                    "failed",
-                    "Update only supported for 'named_list' and 'category_filter'. Other types: recreate.",
-                    steps,
-                )
+                return intent_response("failed", f"Update not supported for resource_type '{resource_type}'.", steps)
 
         elif action in ("add_items", "remove_items"):
             if not resource_id:
                 return intent_response("failed", f"'{action}' requires 'resource_id'.", steps)
             if not items:
                 return intent_response("failed", f"'{action}' requires 'items' list.", steps)
-            inserts = items if action == "add_items" else None
-            deletes = items if action == "remove_items" else None
-            resp = atcfw_client.partial_update_named_list_items(resource_id, inserts=inserts, deletes=deletes)
+            if resource_type == "named_list":
+                inserts = items if action == "add_items" else None
+                deletes = items if action == "remove_items" else None
+                resp = atcfw_client.partial_update_named_list_items(resource_id, inserts=inserts, deletes=deletes)
+            elif resource_type == "network_list":
+                items_described = [{"addr": item, "is_deleted": action == "remove_items"} for item in items]
+                resp = atcfw_client.partial_update_network_list_items(resource_id, items_described)
+            else:
+                return intent_response("failed", f"'{action}' not supported for {resource_type}.", steps)
             result = resp.get("result", resp)
             verb = "Added" if action == "add_items" else "Removed"
-            steps.append(step_result(f"{verb} items from named list", "success", {"id": resource_id, "items": items}))
+            steps.append(
+                step_result(f"{verb} items from {resource_type}", "success", {"id": resource_id, "items": items})
+            )
             return intent_response(
-                "success", f"{verb} {len(items)} item(s) in named list {resource_id}", steps, result=result
+                "success", f"{verb} {len(items)} item(s) in {resource_type} {resource_id}", steps, result=result
             )
 
         elif action == "delete":
             if not resource_id:
                 return intent_response("failed", "Delete requires 'resource_id'.", steps)
-            if resource_type not in ("named_list", "category_filter"):
-                return intent_response(
-                    "failed",
-                    "Delete only supported for 'named_list' and 'category_filter'. Other types: use Infoblox Portal.",
-                    steps,
-                )
-
             if dry_run:
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
                     steps,
                     result={"resource_id": resource_id},
-                    warnings=["This is a DRY RUN. Set dry_run=False to actually delete."],
+                    warnings=["Set dry_run=False to execute."],
                     next_actions=[
                         f"Execute: manage_security_policy(resource_type='{resource_type}', action='delete', resource_id='{resource_id}', dry_run=False)"
                     ],
                 )
-            if resource_type == "named_list":
+            if resource_type == "policy":
+                atcfw_client.delete_security_policy(resource_id)
+            elif resource_type == "policy_rule":
+                if "|" not in resource_id:
+                    return intent_response(
+                        "failed", "policy_rule delete requires resource_id in format 'policy_id|rule_id'.", steps
+                    )
+                policy_id, rule_id = resource_id.split("|", 1)
+                atcfw_client.delete_security_policy_rule(policy_id, rule_id)
+            elif resource_type == "named_list":
                 atcfw_client.delete_named_list(resource_id)
             elif resource_type == "category_filter":
                 atcfw_client.delete_category_filter(resource_id)
+            elif resource_type == "network_list":
+                atcfw_client.delete_network_list(resource_id)
+            elif resource_type == "app_filter":
+                atcfw_client.delete_application_filter(resource_id)
+            elif resource_type == "internal_domains":
+                atcfw_client.delete_internal_domain_list(resource_id)
+            elif resource_type == "access_code":
+                atcfw_client.delete_access_code(resource_id)
+            else:
+                return intent_response("failed", f"Delete not supported for resource_type '{resource_type}'.", steps)
             steps.append(step_result(f"Delete {resource_type}", "success", {"id": resource_id}))
             return intent_response("success", f"Deleted {resource_type} {resource_id}", steps)
 
@@ -4362,6 +5204,137 @@ def manage_dtc(
         return intent_response("failed", f"Failed to {action} {resource_type}: {e}", steps)
 
 
+# ==================== DoH / Threat Feeds / Approvals ====================
+
+
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
+def manage_doh(
+    action: Literal[
+        "list_pop_regions",
+        "create_doh_fqdn",
+        "list_threat_feeds",
+        "create_threat_indicator",
+        "list_app_approvals",
+        "update_app_approvals",
+        "list_block_approvals",
+        "update_block_approvals",
+    ],
+    fqdn: str | None = None,
+    data: dict[str, Any] | None = None,
+    updates: dict[str, Any] | None = None,
+) -> dict:
+    """
+    Manage DNS-over-HTTPS (DoH) FQDNs, Point-of-Presence regions, threat feeds, threat indicators,
+    and application/block approval lists.
+
+    Args:
+        action: Operation to perform
+        fqdn: DoH FQDN to create (for create_doh_fqdn)
+        data: Raw payload dict for create_doh_fqdn or create_threat_indicator
+        updates: Update payload for update_app_approvals / update_block_approvals
+
+    Returns:
+        Operation result
+
+    Examples:
+        - manage_doh(action="list_pop_regions") → list all PoP regions
+        - manage_doh(action="create_doh_fqdn", fqdn="doh.example.com") → register DoH FQDN
+        - manage_doh(action="list_threat_feeds") → list available threat feeds
+        - manage_doh(action="create_threat_indicator", data={"type": "ip", "indicator": "1.2.3.4"})
+        - manage_doh(action="list_app_approvals") → list application approvals
+        - manage_doh(action="update_app_approvals", updates={"approved": [...]})
+        - manage_doh(action="list_block_approvals")
+        - manage_doh(action="update_block_approvals", updates={"blocked": [...]})
+    """
+    if not atcfw_client:
+        return intent_response(
+            "failed",
+            "Security (ATCFW) client not initialized. Check INFOBLOX_API_KEY.",
+            next_actions=["Run check_api_health() to verify connectivity"],
+        )
+
+    valid, err = validate_action(
+        action,
+        [
+            "list_pop_regions",
+            "create_doh_fqdn",
+            "list_threat_feeds",
+            "create_threat_indicator",
+            "list_app_approvals",
+            "update_app_approvals",
+            "list_block_approvals",
+            "update_block_approvals",
+        ],
+    )
+    if not valid:
+        return intent_response("failed", err)
+
+    steps = []
+
+    try:
+        if action == "list_pop_regions":
+            resp = atcfw_client.list_pop_regions()
+            items = extract_results(resp)
+            steps.append(step_result("List PoP regions", "success", {"count": len(items)}))
+            return intent_response("success", f"Found {len(items)} PoP region(s)", steps, result=items)
+
+        elif action == "create_doh_fqdn":
+            payload = data or {}
+            if fqdn and "fqdn" not in payload:
+                payload["fqdn"] = fqdn
+            if not payload:
+                return intent_response("failed", "create_doh_fqdn requires 'fqdn' or 'data'.", steps)
+            resp = atcfw_client.create_doh_fqdn(payload)
+            result = resp.get("result", resp)
+            steps.append(step_result("Create DoH FQDN", "success", {"fqdn": fqdn or payload.get("fqdn")}))
+            return intent_response("success", "DoH FQDN created", steps, result=result)
+
+        elif action == "list_threat_feeds":
+            resp = atcfw_client.list_threat_feeds()
+            items = extract_results(resp)
+            steps.append(step_result("List threat feeds", "success", {"count": len(items)}))
+            return intent_response("success", f"Found {len(items)} threat feed(s)", steps, result=items)
+
+        elif action == "create_threat_indicator":
+            if not data:
+                return intent_response("failed", "create_threat_indicator requires 'data' dict.", steps)
+            resp = atcfw_client.create_threat_indicator(data)
+            result = resp.get("result", resp)
+            steps.append(step_result("Create threat indicator", "success", {}))
+            return intent_response("success", "Threat indicator created", steps, result=result)
+
+        elif action == "list_app_approvals":
+            resp = atcfw_client.list_app_approvals()
+            result = resp.get("result", resp)
+            steps.append(step_result("List app approvals", "success", {}))
+            return intent_response("success", "Retrieved application approvals", steps, result=result)
+
+        elif action == "update_app_approvals":
+            if not updates:
+                return intent_response("failed", "update_app_approvals requires 'updates' dict.", steps)
+            resp = atcfw_client.update_app_approvals(updates)
+            result = resp.get("result", resp)
+            steps.append(step_result("Update app approvals", "success", {}))
+            return intent_response("success", "Application approvals updated", steps, result=result)
+
+        elif action == "list_block_approvals":
+            resp = atcfw_client.list_block_approvals()
+            result = resp.get("result", resp)
+            steps.append(step_result("List block approvals", "success", {}))
+            return intent_response("success", "Retrieved block approvals", steps, result=result)
+
+        elif action == "update_block_approvals":
+            if not updates:
+                return intent_response("failed", "update_block_approvals requires 'updates' dict.", steps)
+            resp = atcfw_client.update_block_approvals(updates)
+            result = resp.get("result", resp)
+            steps.append(step_result("Update block approvals", "success", {}))
+            return intent_response("success", "Block approvals updated", steps, result=result)
+
+    except Exception as e:
+        return intent_response("failed", f"Failed to {action}: {e}", steps)
+
+
 # ==================== Security Insight Triage Tools ====================
 
 
@@ -4414,6 +5387,16 @@ def triage_security_insight(
     valid_statuses = ["IN_PROGRESS", "RESOLVED", "CLOSED", "FALSE_POSITIVE"]
     if status and status not in valid_statuses:
         return intent_response("failed", f"Invalid status '{status}'. Allowed: {', '.join(valid_statuses)}")
+
+    if insight_id is not None:
+        valid, err = validate_insight_id(insight_id)
+        if not valid:
+            return intent_response("failed", err)
+
+    if insight_ids is not None:
+        bad = [i for i in insight_ids if not validate_insight_id(i)[0]]
+        if bad:
+            return intent_response("failed", f"Invalid insight_ids: {bad[:5]}")
 
     steps = []
 
@@ -4535,11 +5518,11 @@ def triage_security_insight(
 
 @mcp.resource("infoblox://tools")
 def resource_tool_catalog() -> str:
-    """Catalog of all 23 intent tools with descriptions, grouped by domain."""
+    """Catalog of all 26 intent tools with descriptions, grouped by domain."""
     return json.dumps(
         {
             "version": __version__,
-            "tool_count": 23,
+            "tool_count": 26,
             "domains": {
                 "discovery": {
                     "tools": ["explore_network", "search_infrastructure", "get_network_summary"],
@@ -4564,20 +5547,27 @@ def resource_tool_catalog() -> str:
                         "assess_security_posture",
                         "manage_security_policy",
                         "triage_security_insight",
+                        "manage_doh",
                     ],
-                    "description": "Threat investigation, posture assessment, policy management, and triage",
+                    "description": "Threat investigation, posture assessment, policy management, triage, and DoH/threat-feed management",
                 },
                 "ipam": {
                     "tools": ["manage_network", "manage_ip_reservation", "get_ip_utilization"],
-                    "description": "CRUD for subnets, address blocks, ranges, and IP reservations",
+                    "description": "CRUD for IP spaces, subnets, address blocks, ranges, and IP reservations",
                 },
                 "dns": {
-                    "tools": ["manage_dns_zone", "manage_dns_record", "manage_dtc"],
-                    "description": "CRUD for DNS zones, records, and DNS Traffic Control (DTC/GSLB)",
+                    "tools": [
+                        "manage_dns_zone",
+                        "manage_dns_record",
+                        "manage_dtc",
+                        "manage_rpz_policies",
+                        "manage_dnssec",
+                    ],
+                    "description": "CRUD for DNS zones, records, RPZ rules, DNSSEC lifecycle, and DNS Traffic Control (DTC/GSLB)",
                 },
                 "dhcp": {
                     "tools": ["manage_dhcp", "manage_dhcp_lease"],
-                    "description": "CRUD for HA groups, option codes, filters, hardware, and lease management",
+                    "description": "CRUD for HA groups, option codes, filters, hardware, DHCP servers, and lease management",
                 },
                 "federation": {
                     "tools": ["manage_federation"],
@@ -4893,7 +5883,7 @@ def main():
         print("=" * 60, file=sys.stderr)
         print(f"  Endpoint:  http://{host}:{port}{path}", file=sys.stderr)
         print("  Transport: HTTP streamable (spec-compliant)", file=sys.stderr)
-        print("  Tools:     23 intent-level workflow tools", file=sys.stderr)
+        print("  Tools:     26 intent-level workflow tools", file=sys.stderr)
         print(f"  Auth:      Bearer token {auth_status}", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
 

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-04-11
+
+### Added
+
+- **3 new MCP tools** (23 → 26 total):
+  - `manage_rpz_policies` — RPZ rule CRUD (list, get, create, update, delete) via DDI client
+  - `manage_dnssec` — DNSSEC lifecycle: sign/unsign zones, check status, export trust anchors, delete keys, import keysets
+  - `manage_doh` — DNS-over-HTTPS and security operations: PoP regions, DoH FQDNs, threat feeds, threat indicators, app/block approvals
+- **5 extended MCP tools** covering previously unreachable actions:
+  - `manage_network` — ip_space full CRUD (create with dry_run guard, get, update, delete)
+  - `manage_dhcp` — 7 new resource types: `option_code`, `hardware_filter`, `option_filter`, `hardware`, `option_group`, `mac_item`, `dhcp_host`; new actions `bulk_create`, `link`, `delink`
+  - `manage_dns_zone` — 7 new resource types: `rpz`, `delegation`, `dns_acl`, `auth_nsg`, `forward_nsg`, `dns_server`, `dns_host`; new `copy` action; `target_view` parameter
+  - `manage_ip_reservation` — IPAM host routing (`ipam/host/*` resource IDs now routed to ipam host methods)
+  - `manage_security_policy` — full security policy and rule CRUD, network list management
+- **3 input validation functions** added at module level: `validate_dns_value`, `sanitize_query`, `validate_insight_id`
+
+### Fixed
+
+- **`manage_doh` NameError** — function was referencing undefined `security_client` (9 call sites); corrected to `atcfw_client` (the initialized global)
+
+### Changed
+
+- Version bumped from 2.0.0 to 2.1.0 (303 API methods, 26 tools)
+- All user-visible metadata updated to reflect 26 tools: README, pyproject.toml, FastMCP instructions, startup banner, `infoblox://tools` resource catalog
+
 ## [2.0.0] - 2026-03-30
 
 ### Added

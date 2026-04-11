@@ -6,7 +6,7 @@
 
 # Infoblox DDI — MCP Server
 
-> **23 intent-level workflow tools** for managing Infoblox Universal DDI via the Model Context Protocol.
+> **26 intent-level workflow tools** for managing Infoblox Universal DDI via the Model Context Protocol.
 
 Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, DHCP, IPAM, security, and federation — without being an Infoblox expert.
 
@@ -14,7 +14,7 @@ Any MCP-compatible AI agent can manage your entire DDI infrastructure — DNS, D
 
 ## Why Intent-Level Tools (Not 1:1 API Mapping)
 
-The Infoblox Universal DDI platform has **300+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **23 intent-level workflow tools** backed by **303 API methods** that abstract multi-step operations into single calls.
+The Infoblox Universal DDI platform has **300+ REST API endpoints** across DDI, Security, and Insights services. A naive MCP implementation would expose each endpoint as a separate tool. This server takes a fundamentally different approach: **26 intent-level workflow tools** backed by **303 API methods** that abstract multi-step operations into single calls.
 
 **The problem with 1:1 mapping:**
 
@@ -34,9 +34,9 @@ The Infoblox Universal DDI platform has **300+ REST API endpoints** across DDI, 
 provision_host(hostname="web-01", space="prod", zone="example.com")
 ```
 
-| Concern | 1:1 Mapping (300+ tools) | Intent Layer (23 tools) |
+| Concern | 1:1 Mapping (300+ tools) | Intent Layer (26 tools) |
 |---------|----------------------|------------------------|
-| **LLM tool selection** | Agent must choose from 300+ tools — high hallucination rate | 23 tools with `USE THIS for X / For Y use Z` disambiguation |
+| **LLM tool selection** | Agent must choose from 300+ tools — high hallucination rate | 26 tools with `USE THIS for X / For Y use Z` disambiguation |
 | **Token efficiency** | 5-7 API calls per workflow, each consuming context window | Single call, single response |
 | **Error handling** | Agent must implement rollback, partial-success, retry | Server-side orchestration with `steps[]` tracking |
 | **Domain knowledge** | Agent needs to know Infoblox resource IDs, filter syntax, API paths | Agent speaks business intent: "provision host", "diagnose DNS" |
@@ -143,7 +143,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop — the 23 tools appear in the tool picker.
+Restart Claude Desktop — the 26 tools appear in the tool picker.
 
 ### Claude Code (CLI)
 
@@ -281,7 +281,7 @@ AEX has native MCP client support. In **Admin Console → Agent Studio**:
 1. Add an MCP Server tool source
 2. Set the endpoint to `http://<host>:4005/mcp`
 3. Start the server with `python mcp_intent.py --http`
-4. The 20 DDI tools are auto-discovered and available to AEX agents
+4. The 26 tools are auto-discovered and available to AEX agents
 
 ### Any HTTP Client
 
