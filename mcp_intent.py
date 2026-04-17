@@ -14,6 +14,7 @@ Usage:
     INFOBLOX_API_KEY=your_key python mcp_intent.py --http   # HTTP on port 4005
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -21,13 +22,24 @@ import sys
 
 import structlog
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
+
+# Correlation ID propagated across async calls. Set by CorrelationIdMiddleware
+# on every tool invocation; read by intent_response() so the envelope returned
+# to the agent always carries the same id that appears in structured logs.
+_request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
 # Any non-JSON output on stdout corrupts the protocol stream and causes:
 #   "Unexpected non-whitespace character after JSON at position 4"
+#
+# merge_contextvars is prepended to structlog's default chain so any value bound
+# via structlog.contextvars.bind_contextvars (e.g. request_id from the
+# correlation middleware) automatically appears on every log line emitted in
+# that async context — without touching individual logger.info() calls.
 structlog.configure(
+    processors=[structlog.contextvars.merge_contextvars, *structlog.get_config()["processors"]],
     logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
 )
 
@@ -93,6 +105,51 @@ except ValueError as e:
     atcfw_client = None
 
 
+# ==================== Correlation ID Middleware ====================
+
+from fastmcp.server.middleware.middleware import Middleware  # noqa: E402
+
+
+class CorrelationIdMiddleware(Middleware):
+    """Assigns a request id to every tool call and propagates it across async work.
+
+    For each incoming tools/call:
+      - honors an upstream X-Request-ID header when present (HTTP transport),
+      - otherwise mints a short uuid4 hex (12 chars — enough entropy for log
+        correlation, short enough to stay human-scannable),
+      - binds the id into a sync-readable ContextVar (for intent_response())
+        AND structlog's contextvars (for service-client log lines),
+      - cleans both up in a `finally` so one request's id never leaks into
+        the next request running on the same worker.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        import uuid
+
+        rid: str | None = None
+        try:
+            from fastmcp.server.dependencies import get_http_headers
+
+            headers = get_http_headers()
+            rid = (headers.get("x-request-id") or "").strip() or None
+        except Exception:
+            rid = None
+
+        if not rid:
+            rid = uuid.uuid4().hex[:12]
+
+        token = _request_id_var.set(rid)
+        structlog.contextvars.bind_contextvars(request_id=rid)
+        try:
+            return await call_next(context)
+        finally:
+            structlog.contextvars.unbind_contextvars("request_id")
+            _request_id_var.reset(token)
+
+
+mcp.add_middleware(CorrelationIdMiddleware())
+
+
 # ==================== Response Helpers ====================
 
 
@@ -104,8 +161,14 @@ def intent_response(
     warnings: list[str] = None,
     next_actions: list[str] = None,
 ) -> dict:
-    """Standard intent response envelope"""
-    return {
+    """Standard intent response envelope.
+
+    When a correlation id is bound (set by CorrelationIdMiddleware on every
+    tool call), it is included in the envelope so the caller can correlate
+    their request with server-side logs. Omitted when unset so direct calls
+    to intent_response() from unit tests retain their previous shape.
+    """
+    envelope: dict[str, Any] = {
         "status": status,
         "summary": summary,
         "steps": steps or [],
@@ -113,6 +176,10 @@ def intent_response(
         "warnings": warnings or [],
         "next_actions": next_actions or [],
     }
+    request_id = _request_id_var.get()
+    if request_id:
+        envelope["request_id"] = request_id
+    return envelope
 
 
 def step_result(step_name: str, status: str, result: Any = None, error: str = None) -> dict:

@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] - 2026-04-17
+
+### Added
+
+- **Correlation IDs on every tool call.** A new `CorrelationIdMiddleware` assigns
+  a short request id (12-char uuid4 hex) to every `tools/call`, or honors an
+  upstream `X-Request-ID` header when the HTTP client supplies one. The id is:
+  - surfaced in the `intent_response()` envelope as a top-level `request_id`
+    field, so the agent/client can quote it when reporting issues;
+  - bound into `structlog.contextvars` so every service-client log line emitted
+    during that request automatically carries `request_id=...` — no per-call
+    wiring needed.
+  - reset in a `finally` block so ids never leak between concurrent requests
+    sharing a worker.
+- `structlog`'s default processor chain gains `merge_contextvars` at the front,
+  which is what makes the bound id actually appear on log lines.
+
+### Why
+
+Prior versions returned no correlation token, so when an agent reported a
+failure, operators had to infer the matching log window from timestamps and
+tool name alone. The new id closes that loop: a single string ties the
+response the agent saw to the exact stack of service-client calls on the
+server side.
+
+### Tests
+
+- 9 new regression tests covering: envelope shape with/without an id, UUID
+  minting when no header is supplied, upstream `X-Request-ID` propagation,
+  blank-header fallback, stdio-transport tolerance (no HTTP context), the
+  finally-block cleanup, end-to-end envelope↔middleware agreement, and
+  ContextVar isolation across concurrent asyncio tasks.
+- Full suite: 205 passing (196 + 9 new), no regressions.
+
 ## [2.2.2] - 2026-04-17
 
 ### Fixed
