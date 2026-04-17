@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -123,6 +123,49 @@ def step_result(step_name: str, status: str, result: Any = None, error: str = No
     if error:
         s["error"] = error
     return s
+
+
+def _clean_error(e: Exception | str) -> str:
+    """Return a short, agent-friendly error string safe to include in responses.
+
+    Protects against three classes of leakage:
+      - HTML error pages (nginx 401s etc.) — extract <title> or first text line
+      - Over-long messages (full tracebacks, HTML dumps) — truncate to 280 chars
+      - Obvious credential patterns — censor Bearer tokens and long hex/base64 strings
+    """
+    import re
+    msg = str(e)
+
+    # Collapse HTML error pages to title / first text line
+    if "<html" in msg.lower():
+        m = re.search(r"<title>([^<]+)</title>", msg, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        stripped = re.sub(r"<[^>]+>", " ", msg)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        return (stripped[:280] + "…") if len(stripped) > 280 else stripped or "Upstream HTML error"
+
+    # Censor obvious secret-looking patterns
+    msg = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***", msg)
+    msg = re.sub(r"(?i)(api[_-]?key\s*[=:]\s*)['\"]?[^'\"\s&]+", r"\1***", msg)
+    msg = re.sub(r"\b[A-Fa-f0-9]{32,}\b", "***", msg)
+
+    return (msg[:280] + "…") if len(msg) > 300 else msg
+
+
+def _dns_view_name_map() -> dict[str, str]:
+    """Return {view_id: view_name} for all DNS views.
+
+    Cheap to call repeatedly — the Infoblox client caches list_dns_views for 5 min.
+    Used to enrich zone/record list responses with human-readable view names.
+    """
+    if not client:
+        return {}
+    try:
+        views = extract_results(client.list_dns_views(limit=500))
+        return {v.get("id", ""): v.get("name", "") for v in views if v.get("id")}
+    except Exception:
+        return {}
 
 
 def extract_results(response: dict) -> list:
@@ -268,7 +311,7 @@ def resolve_space(space_name: str) -> tuple:
             f"IP space '{space_name}' not found",
         )
     except Exception as e:
-        return None, step_result("Resolve IP space", "failed", error=str(e)), str(e)
+        return None, step_result("Resolve IP space", "failed", error=_clean_error(e)), _clean_error(e)
 
 
 def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
@@ -302,30 +345,34 @@ def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
 
         # Filter by view if specified
         if view_id:
-            zones = [z for z in zones if z.get("view") == view_id]
-            if not zones:
-                return (
-                    None,
-                    step_result(
-                        "Resolve DNS zone",
-                        "failed",
-                        error=f"DNS zone '{zone_fqdn}' not found in view '{view}'",
-                    ),
-                    f"DNS zone '{zone_fqdn}' not found in view '{view}'",
+            in_view = [z for z in zones if z.get("view") == view_id]
+            if not in_view:
+                # Zone exists, but not in the requested view. Tell them which views DO have it.
+                view_name_map = _dns_view_name_map()
+                found_in = sorted(
+                    {view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones}
                 )
+                err = (
+                    f"Zone '{zone_fqdn}' exists, but not in view '{view}'. "
+                    f"It IS in views: {', '.join(found_in)}. "
+                    f"Retry with one of those, or create the zone in '{view}' first via "
+                    f"manage_dns_zone(action='create', fqdn={zone_fqdn!r}, view={view!r})."
+                )
+                return None, step_result("Resolve DNS zone", "failed", error=err), err
+            zones = in_view
 
-        # Ambiguity check: multiple zones, no view specified
+        # Ambiguity check: multiple zones, no view specified.
+        # Surface view NAMES (not raw UUIDs) so the caller can immediately pick.
         if len(zones) > 1 and not view_id:
-            view_names = [z.get("view", "unknown") for z in zones]
-            return (
-                None,
-                step_result(
-                    "Resolve DNS zone",
-                    "failed",
-                    error=f"Zone '{zone_fqdn}' exists in {len(zones)} views: {view_names}. Specify a view to disambiguate.",
-                ),
-                f"Zone '{zone_fqdn}' exists in {len(zones)} views: {view_names}. Specify a view to disambiguate.",
+            view_name_map = _dns_view_name_map()
+            view_names = sorted(
+                {view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones}
             )
+            err = (
+                f"Zone '{zone_fqdn}' exists in {len(zones)} views: {', '.join(view_names)}. "
+                f"Specify a view to disambiguate (e.g. view='{view_names[0]}')."
+            )
+            return None, step_result("Resolve DNS zone", "failed", error=err), err
 
         zone_id = zones[0].get("id", "")
         return (
@@ -334,7 +381,7 @@ def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
             "",
         )
     except Exception as e:
-        return None, step_result("Resolve DNS zone", "failed", error=str(e)), str(e)
+        return None, step_result("Resolve DNS zone", "failed", error=_clean_error(e)), _clean_error(e)
 
 
 def resolve_view(view_name: str) -> tuple:
@@ -354,13 +401,20 @@ def resolve_view(view_name: str) -> tuple:
                 step_result("Resolve DNS view", "success", {"view_id": view_id, "name": views[0].get("name")}),
                 "",
             )
-        return (
-            None,
-            step_result("Resolve DNS view", "failed", error=f"DNS view '{view_name}' not found"),
-            f"DNS view '{view_name}' not found",
+        # Not found — surface every available view so the caller knows what to pick
+        import difflib
+        view_map = _dns_view_name_map()
+        available = sorted(n for n in view_map.values() if n)
+        closest = difflib.get_close_matches(view_name, available, n=1, cutoff=0.4)
+        hint = f" Closest match: '{closest[0]}'." if closest else ""
+        available_str = ", ".join(available) if available else "(no DNS views configured)"
+        err = (
+            f"DNS view '{view_name}' not found. Available views: {available_str}.{hint} "
+            "Retry with one of those names, or pass the view UUID directly (dns/view/...)."
         )
+        return None, step_result("Resolve DNS view", "failed", error=err), err
     except Exception as e:
-        return None, step_result("Resolve DNS view", "failed", error=str(e)), str(e)
+        return None, step_result("Resolve DNS view", "failed", error=_clean_error(e)), _clean_error(e)
 
 
 def resolve_realm(realm_name: str) -> tuple:
@@ -388,7 +442,7 @@ def resolve_realm(realm_name: str) -> tuple:
             f"Federated realm '{realm_name}' not found",
         )
     except Exception as e:
-        return None, step_result("Resolve federated realm", "failed", error=str(e)), str(e)
+        return None, step_result("Resolve federated realm", "failed", error=_clean_error(e)), _clean_error(e)
 
 
 # ==================== Discovery & Exploration Tools ====================
@@ -586,7 +640,7 @@ def search_infrastructure(
             total_found += len(items)
             steps.append(step_result("Search DNS zones", "success", {"count": len(items)}))
         except Exception as e:
-            steps.append(step_result("Search DNS zones", "failed", error=str(e)))
+            steps.append(step_result("Search DNS zones", "failed", error=_clean_error(e)))
 
     # Search subnets
     if "subnets" in search_types:
@@ -608,7 +662,7 @@ def search_infrastructure(
             total_found += len(items)
             steps.append(step_result("Search subnets", "success", {"count": len(items)}))
         except Exception as e:
-            steps.append(step_result("Search subnets", "failed", error=str(e)))
+            steps.append(step_result("Search subnets", "failed", error=_clean_error(e)))
 
     # Search DNS records
     if "dns_records" in search_types:
@@ -631,7 +685,7 @@ def search_infrastructure(
             total_found += len(items)
             steps.append(step_result("Search DNS records", "success", {"count": len(items)}))
         except Exception as e:
-            steps.append(step_result("Search DNS records", "failed", error=str(e)))
+            steps.append(step_result("Search DNS records", "failed", error=_clean_error(e)))
 
     # Search IPAM hosts
     if "hosts" in search_types:
@@ -650,7 +704,7 @@ def search_infrastructure(
             total_found += len(items)
             steps.append(step_result("Search IPAM hosts", "success", {"count": len(items)}))
         except Exception as e:
-            steps.append(step_result("Search IPAM hosts", "failed", error=str(e)))
+            steps.append(step_result("Search IPAM hosts", "failed", error=_clean_error(e)))
 
     # Search IP addresses
     if "addresses" in search_types:
@@ -670,7 +724,7 @@ def search_infrastructure(
             total_found += len(items)
             steps.append(step_result("Search IP addresses", "success", {"count": len(items)}))
         except Exception as e:
-            steps.append(step_result("Search IP addresses", "failed", error=str(e)))
+            steps.append(step_result("Search IP addresses", "failed", error=_clean_error(e)))
 
     status = "success" if total_found > 0 else "success"
     summary = f"Found {total_found} result(s) matching '{query}'"
@@ -725,7 +779,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["ip_spaces"] = {"count": len(spaces), "names": [s.get("name", "") for s in spaces]}
         steps.append(step_result("Count IP spaces", "success", {"count": len(spaces)}))
     except Exception as e:
-        steps.append(step_result("Count IP spaces", "failed", error=str(e)))
+        steps.append(step_result("Count IP spaces", "failed", error=_clean_error(e)))
 
     # Subnets
     try:
@@ -733,7 +787,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["subnets"] = {"count": len(subnets)}
         steps.append(step_result("Count subnets", "success", {"count": len(subnets)}))
     except Exception as e:
-        steps.append(step_result("Count subnets", "failed", error=str(e)))
+        steps.append(step_result("Count subnets", "failed", error=_clean_error(e)))
 
     # Address blocks
     try:
@@ -741,7 +795,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["address_blocks"] = {"count": len(blocks)}
         steps.append(step_result("Count address blocks", "success", {"count": len(blocks)}))
     except Exception as e:
-        steps.append(step_result("Count address blocks", "failed", error=str(e)))
+        steps.append(step_result("Count address blocks", "failed", error=_clean_error(e)))
 
     # DNS zones
     try:
@@ -749,7 +803,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["dns_zones"] = {"count": len(auth_zones)}
         steps.append(step_result("Count DNS zones", "success", {"count": len(auth_zones)}))
     except Exception as e:
-        steps.append(step_result("Count DNS zones", "failed", error=str(e)))
+        steps.append(step_result("Count DNS zones", "failed", error=_clean_error(e)))
 
     # DHCP hosts
     try:
@@ -757,7 +811,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["dhcp_hosts"] = {"count": len(dhcp_hosts)}
         steps.append(step_result("Count DHCP hosts", "success", {"count": len(dhcp_hosts)}))
     except Exception as e:
-        steps.append(step_result("Count DHCP hosts", "failed", error=str(e)))
+        steps.append(step_result("Count DHCP hosts", "failed", error=_clean_error(e)))
 
     # HA groups
     try:
@@ -765,7 +819,7 @@ def get_network_summary(scope: str | None = None) -> dict:
         summary_data["ha_groups"] = {"count": len(ha_groups)}
         steps.append(step_result("Count HA groups", "success", {"count": len(ha_groups)}))
     except Exception as e:
-        steps.append(step_result("Count HA groups", "failed", error=str(e)))
+        steps.append(step_result("Count HA groups", "failed", error=_clean_error(e)))
 
     scope_label = f"'{scope}'" if scope else "all"
     total_items = sum(v.get("count", 0) for v in summary_data.values() if isinstance(v, dict))
@@ -921,7 +975,7 @@ def provision_host(
                 steps.append(step_result("Resolve DNS zone", "skipped", error=z_err))
         except Exception as e:
             warnings.append(f"Failed to resolve zone: {e} — DNS records skipped.")
-            steps.append(step_result("Resolve DNS zone", "failed", error=str(e)))
+            steps.append(step_result("Resolve DNS zone", "failed", error=_clean_error(e)))
 
     # Dry run: show what would be created without executing
     if dry_run:
@@ -1016,7 +1070,7 @@ def provision_host(
             created_resources.append({"type": "dns_a_record", "id": dns_a_id})
         except Exception as e:
             warnings.append(f"Failed to create A record: {e}")
-            steps.append(step_result("Create DNS A record", "failed", error=str(e)))
+            steps.append(step_result("Create DNS A record", "failed", error=_clean_error(e)))
 
         # Step 6: Create DNS PTR record
         if assigned_ip and dns_a_id:
@@ -1051,7 +1105,7 @@ def provision_host(
                     steps.append(step_result("Create DNS PTR record", "skipped", error="Reverse zone not found"))
             except Exception as e:
                 warnings.append(f"Failed to create PTR record: {e}")
-                steps.append(step_result("Create DNS PTR record", "failed", error=str(e)))
+                steps.append(step_result("Create DNS PTR record", "failed", error=_clean_error(e)))
 
     # Build summary
     success_count = sum(1 for s in steps if s["status"] == "success")
@@ -1409,7 +1463,7 @@ def decommission_host(identifier: str, dry_run: bool = True) -> dict:
                         detail += " (DNS auto-cleaned)"
                     steps.append(step_result(detail, "success"))
                 except Exception as e:
-                    steps.append(step_result(f"Delete host {resource.get('name')}", "failed", error=str(e)))
+                    steps.append(step_result(f"Delete host {resource.get('name')}", "failed", error=_clean_error(e)))
 
         summary = f"Decommissioned: {len(deleted)}/{len([r for r in resources_to_delete if r['type'] not in ('ip_release', 'dns_auto_managed')])} resources deleted"
     else:
@@ -1506,7 +1560,7 @@ def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False
         except Exception as e:
             warnings_msg = f"Cache flush failed: {e}"
             diagnostics.setdefault("warnings", []).append(warnings_msg)
-            steps.append(step_result("Flush DNS cache", "failed", error=str(e)))
+            steps.append(step_result("Flush DNS cache", "failed", error=_clean_error(e)))
 
     # Step 2: Check DNS records for this domain
     try:
@@ -1533,7 +1587,7 @@ def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False
                 diagnostics["issues"].append("No A, AAAA, or CNAME record found — domain won't resolve to an IP")
 
     except Exception as e:
-        steps.append(step_result("Check DNS records", "failed", error=str(e)))
+        steps.append(step_result("Check DNS records", "failed", error=_clean_error(e)))
 
     # Step 3: Check security policies (if atcfw client available)
     if atcfw_client:
@@ -1542,7 +1596,7 @@ def diagnose_dns(domain: str, view: str | None = None, flush_cache: bool = False
             diagnostics["security"] = {"policies_count": len(policies), "status": "checked"}
             steps.append(step_result("Check security policies", "success", {"policies": len(policies)}))
         except Exception as e:
-            steps.append(step_result("Check security policies", "failed", error=str(e)))
+            steps.append(step_result("Check security policies", "failed", error=_clean_error(e)))
     else:
         diagnostics["security"] = {"status": "client_not_available"}
 
@@ -1620,7 +1674,7 @@ def diagnose_ip_conflict(address: str) -> dict:
         if len(matching_subnets) > 1:
             diagnostics["conflicts"].append(f"IP belongs to {len(matching_subnets)} subnets — possible overlap")
     except Exception as e:
-        steps.append(step_result("Check subnets", "failed", error=str(e)))
+        steps.append(step_result("Check subnets", "failed", error=_clean_error(e)))
 
     # Step 2: Check IP address records
     try:
@@ -1634,7 +1688,7 @@ def diagnose_ip_conflict(address: str) -> dict:
         if len(addresses) > 1:
             diagnostics["conflicts"].append(f"Multiple address records found for {address}")
     except Exception as e:
-        steps.append(step_result("Check address records", "failed", error=str(e)))
+        steps.append(step_result("Check address records", "failed", error=_clean_error(e)))
 
     # Step 3: Check IP ranges
     try:
@@ -1647,7 +1701,7 @@ def diagnose_ip_conflict(address: str) -> dict:
         ]
         steps.append(step_result("Check IP ranges", "success", {"count": len(ranges)}))
     except Exception as e:
-        steps.append(step_result("Check IP ranges", "failed", error=str(e)))
+        steps.append(step_result("Check IP ranges", "failed", error=_clean_error(e)))
 
     # Step 4: Check IPAM host associations
     try:
@@ -1659,7 +1713,7 @@ def diagnose_ip_conflict(address: str) -> dict:
         if len(hosts) > 1:
             diagnostics["conflicts"].append(f"Multiple IPAM hosts associated with {address}")
     except Exception as e:
-        steps.append(step_result("Check host associations", "failed", error=str(e)))
+        steps.append(step_result("Check host associations", "failed", error=_clean_error(e)))
 
     conflict_count = len(diagnostics["conflicts"])
     status = "success" if conflict_count == 0 else "partial"
@@ -1706,8 +1760,8 @@ def check_api_health() -> dict:
             steps.append(step_result("DDI API", "success", {"latency_ms": latency_ms}))
             healthy_count += 1
         except Exception as e:
-            results["ddi_api"] = {"status": "unreachable", "error": str(e)}
-            steps.append(step_result("DDI API", "failed", error=str(e)))
+            results["ddi_api"] = {"status": "unreachable", "error": _clean_error(e)}
+            steps.append(step_result("DDI API", "failed", error=_clean_error(e)))
     else:
         results["ddi_api"] = {"status": "not_initialized"}
         steps.append(step_result("DDI API", "skipped", error="Client not initialized"))
@@ -1723,8 +1777,8 @@ def check_api_health() -> dict:
             steps.append(step_result("Insights API", "success", {"latency_ms": latency_ms}))
             healthy_count += 1
         except Exception as e:
-            results["insights_api"] = {"status": "unreachable", "error": str(e)}
-            steps.append(step_result("Insights API", "failed", error=str(e)))
+            results["insights_api"] = {"status": "unreachable", "error": _clean_error(e)}
+            steps.append(step_result("Insights API", "failed", error=_clean_error(e)))
     else:
         results["insights_api"] = {"status": "not_initialized"}
         steps.append(step_result("Insights API", "skipped", error="Client not initialized"))
@@ -1740,8 +1794,8 @@ def check_api_health() -> dict:
             steps.append(step_result("ATCFW API", "success", {"latency_ms": latency_ms}))
             healthy_count += 1
         except Exception as e:
-            results["atcfw_api"] = {"status": "unreachable", "error": str(e)}
-            steps.append(step_result("ATCFW API", "failed", error=str(e)))
+            results["atcfw_api"] = {"status": "unreachable", "error": _clean_error(e)}
+            steps.append(step_result("ATCFW API", "failed", error=_clean_error(e)))
     else:
         results["atcfw_api"] = {"status": "not_initialized"}
         steps.append(step_result("ATCFW API", "skipped", error="Client not initialized"))
@@ -1797,7 +1851,7 @@ def check_infrastructure_health() -> dict:
             health["issues"].append("No HA groups configured — single point of failure risk")
         steps.append(step_result("Check HA groups", "success", {"count": len(ha_groups)}))
     except Exception as e:
-        steps.append(step_result("Check HA groups", "failed", error=str(e)))
+        steps.append(step_result("Check HA groups", "failed", error=_clean_error(e)))
 
     # Check DHCP hosts
     try:
@@ -1808,7 +1862,7 @@ def check_infrastructure_health() -> dict:
         }
         steps.append(step_result("Check DHCP hosts", "success", {"count": len(dhcp_hosts)}))
     except Exception as e:
-        steps.append(step_result("Check DHCP hosts", "failed", error=str(e)))
+        steps.append(step_result("Check DHCP hosts", "failed", error=_clean_error(e)))
 
     # Check DNS zones
     try:
@@ -1816,7 +1870,7 @@ def check_infrastructure_health() -> dict:
         health["components"]["dns_zones"] = {"count": len(zones), "status": "healthy" if zones else "no_zones"}
         steps.append(step_result("Check DNS zones", "success", {"count": len(zones)}))
     except Exception as e:
-        steps.append(step_result("Check DNS zones", "failed", error=str(e)))
+        steps.append(step_result("Check DNS zones", "failed", error=_clean_error(e)))
 
     # Check IP spaces
     try:
@@ -1824,7 +1878,7 @@ def check_infrastructure_health() -> dict:
         health["components"]["ip_spaces"] = {"count": len(spaces), "status": "healthy" if spaces else "no_spaces"}
         steps.append(step_result("Check IP spaces", "success", {"count": len(spaces)}))
     except Exception as e:
-        steps.append(step_result("Check IP spaces", "failed", error=str(e)))
+        steps.append(step_result("Check IP spaces", "failed", error=_clean_error(e)))
 
     # Check DNS views
     try:
@@ -1836,7 +1890,7 @@ def check_infrastructure_health() -> dict:
         }
         steps.append(step_result("Check DNS views", "success", {"count": len(views)}))
     except Exception as e:
-        steps.append(step_result("Check DNS views", "failed", error=str(e)))
+        steps.append(step_result("Check DNS views", "failed", error=_clean_error(e)))
 
     # Check on-prem infrastructure hosts
     try:
@@ -1862,7 +1916,7 @@ def check_infrastructure_health() -> dict:
             )
         steps.append(step_result("Check infra hosts", "success", {"count": len(infra_hosts)}))
     except Exception as e:
-        steps.append(step_result("Check infra hosts", "failed", error=str(e)))
+        steps.append(step_result("Check infra hosts", "failed", error=_clean_error(e)))
 
     # Check infrastructure services
     try:
@@ -1890,7 +1944,7 @@ def check_infrastructure_health() -> dict:
             )
         steps.append(step_result("Check infra services", "success", {"count": len(infra_services)}))
     except Exception as e:
-        steps.append(step_result("Check infra services", "failed", error=str(e)))
+        steps.append(step_result("Check infra services", "failed", error=_clean_error(e)))
 
     # Overall health
     failed_steps = sum(1 for s in steps if s["status"] == "failed")
@@ -2072,7 +2126,7 @@ def assess_security_posture() -> dict:
             }
             steps.append(step_result("Check security policies", "success", {"count": len(policies)}))
         except Exception as e:
-            steps.append(step_result("Check security policies", "failed", error=str(e)))
+            steps.append(step_result("Check security policies", "failed", error=_clean_error(e)))
     else:
         steps.append(step_result("Check security policies", "skipped", error="Atcfw client not available"))
 
@@ -2086,7 +2140,7 @@ def assess_security_posture() -> dict:
             }
             steps.append(step_result("Check threat named lists", "success", {"count": len(named_lists)}))
         except Exception as e:
-            steps.append(step_result("Check threat named lists", "failed", error=str(e)))
+            steps.append(step_result("Check threat named lists", "failed", error=_clean_error(e)))
 
     # Check category filters (content filtering coverage)
     if atcfw_client:
@@ -2098,14 +2152,14 @@ def assess_security_posture() -> dict:
             }
             steps.append(step_result("Check category filters", "success", {"count": len(cat_filters)}))
         except Exception as e:
-            steps.append(step_result("Check category filters", "failed", error=str(e)))
+            steps.append(step_result("Check category filters", "failed", error=_clean_error(e)))
 
         try:
             content_cats = extract_results(atcfw_client.list_content_categories())
             posture["content_categories"] = {"count": len(content_cats)}
             steps.append(step_result("Check content categories", "success", {"count": len(content_cats)}))
         except Exception as e:
-            steps.append(step_result("Check content categories", "failed", error=str(e)))
+            steps.append(step_result("Check content categories", "failed", error=_clean_error(e)))
 
     # Check policy compliance insights
     if insights_client:
@@ -2117,7 +2171,7 @@ def assess_security_posture() -> dict:
             }
             steps.append(step_result("Check policy compliance", "success", {"count": len(compliance)}))
         except Exception as e:
-            steps.append(step_result("Check policy compliance", "failed", error=str(e)))
+            steps.append(step_result("Check policy compliance", "failed", error=_clean_error(e)))
 
     # Check analytics insights
     if insights_client:
@@ -2129,7 +2183,7 @@ def assess_security_posture() -> dict:
             }
             steps.append(step_result("Check policy analytics", "success", {"count": len(analytics)}))
         except Exception as e:
-            steps.append(step_result("Check policy analytics", "failed", error=str(e)))
+            steps.append(step_result("Check policy analytics", "failed", error=_clean_error(e)))
 
     return intent_response(
         status="success",
@@ -2408,6 +2462,36 @@ def manage_network(
             return intent_response("success", f"Found {len(items)} {resource_type}(s)", steps, result=result)
 
         elif action == "create":
+            # Safety: honor dry_run on every create path (subnet, address_block, range, ip_space).
+            # Previously only ip_space checked dry_run; the other three bypassed it entirely.
+            if dry_run:
+                target = name or address or (f"{start}-{end}" if start and end else None)
+                if not target:
+                    return intent_response(
+                        "failed",
+                        "Create requires 'address' (CIDR) for subnet/address_block, 'start'+'end' for range, or 'name' for ip_space.",
+                        steps,
+                    )
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create {resource_type} '{target}'" + (f" in space '{space}'" if space else ""),
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "address": address,
+                        "start": start,
+                        "end": end,
+                        "name": name,
+                        "space": space,
+                        "comment": comment,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_network(action='create', resource_type='{resource_type}', ..., dry_run=False)"
+                    ],
+                )
+
             if resource_type == "subnet":
                 if not address or not space_id:
                     return intent_response("failed", "Subnet create requires 'address' (CIDR) and 'space'.", steps)
@@ -2461,14 +2545,6 @@ def manage_network(
             elif resource_type == "ip_space":
                 if not name:
                     return intent_response("failed", "IP space create requires 'name'.", steps)
-                if dry_run:
-                    return intent_response(
-                        "success",
-                        f"DRY RUN: Would create IP space '{name}'",
-                        steps,
-                        result={"name": name, "comment": comment},
-                        warnings=["This is a DRY RUN. Set dry_run=False to actually create."],
-                    )
                 resp = client.create_ip_space(name=name, comment=comment)
                 result = resp.get("result", resp)
                 steps.append(step_result("Create IP space", "success", {"id": result.get("id"), "name": name}))
@@ -2538,7 +2614,7 @@ def manage_network(
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
                 except Exception as e:
-                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -2649,7 +2725,9 @@ def manage_dns_zone(
     - DNS Services: resource_type="dns_service" → list, get
     - DNS Global: resource_type="dns_global" → get, update
 
-    IMPORTANT: Delete runs in dry_run mode by default. sign/unsign/dnssec_status only work with auth_zone. reorder only works with rpz.
+    IMPORTANT: ALL mutating actions (create, update, delete) default to dry_run=True and must be explicitly set to dry_run=False to execute. sign/unsign/dnssec_status only work with auth_zone. reorder only works with rpz.
+
+    View scoping: when `view` is supplied on list/get/delete, it MUST be the exact DNS view name configured in Infoblox (not the literal string "default" unless the customer named a view that). Use manage_dns_zone(action="list", resource_type="dns_view") to see the actual view names first. UUIDs (dns/view/...) are also accepted.
 
     Args:
         action: Operation to perform
@@ -2728,16 +2806,30 @@ def manage_dns_zone(
 
     steps = []
 
+    # If a view was provided, resolve it to a UUID so list calls can filter by view.
+    # Applies to auth_zone, forward_zone, and rpz — each of which has a `view` attribute.
+    # On failure resolve_view returns a rich error listing available views.
+    _zone_list_filter: str | None = None
+    if view and action == "list" and resource_type in ("auth_zone", "forward_zone", "rpz"):
+        view_id, v_step, v_err = resolve_view(view)
+        if v_step:
+            steps.append(v_step)
+        if v_err:
+            return intent_response("failed", v_err, steps)
+        _zone_list_filter = f'view=="{view_id}"'
+
     # Dispatch table for list/get/delete/update
     dispatch = {
         "auth_zone": {
-            "list": lambda: client.list_auth_zones(limit=200),
+            "list": lambda: client.list_auth_zones(filter=_zone_list_filter, limit=200),
             "get": lambda rid: client.list_auth_zones(limit=200),  # placeholder, handled below
-            "delete": lambda rid: None,  # handled in delete logic
-            "update": lambda rid, u: None,  # auth zones don't have generic update in original
+            "delete": lambda rid: client.delete_auth_zone(rid),
+            "update": lambda rid, u: client.update_auth_zone(rid, u),
         },
         "forward_zone": {
-            "list": lambda: client.list_forward_zones(limit=200),
+            "list": lambda: client.list_forward_zones(filter=_zone_list_filter, limit=200),
+            "delete": lambda rid: client.delete_forward_zone(rid),
+            "update": lambda rid, u: client.update_forward_zone(rid, u),
         },
         "dns_view": {
             "list": lambda: client.list_dns_views(limit=200),
@@ -2746,7 +2838,7 @@ def manage_dns_zone(
             "update": lambda rid, u: client.update_dns_view(rid, u),
         },
         "rpz": {
-            "list": lambda: client.list_rpz_zones(limit=200),
+            "list": lambda: client.list_rpz_zones(filter=_zone_list_filter, limit=200),
             "get": lambda rid: client.get_rpz_zone(rid),
             "delete": lambda rid: client.delete_rpz_zone(rid),
             "update": lambda rid, u: client.update_rpz_zone(rid, u),
@@ -2806,6 +2898,13 @@ def manage_dns_zone(
             resp = dispatch[resource_type]["list"]()
             items = extract_results(resp)
 
+            # Fetch view name map once for view-scoped resources so each row
+            # can include view_name — saves the agent a follow-up list_dns_views
+            # call when disambiguating split-horizon zones.
+            view_name_map: dict[str, str] = {}
+            if resource_type in ("auth_zone", "forward_zone", "rpz", "delegation"):
+                view_name_map = _dns_view_name_map()
+
             if resource_type == "auth_zone":
                 result = [
                     {
@@ -2813,6 +2912,7 @@ def manage_dns_zone(
                         "fqdn": z.get("fqdn"),
                         "primary_type": z.get("primary_type", ""),
                         "view": z.get("view"),
+                        "view_name": view_name_map.get(z.get("view", ""), ""),
                         "comment": z.get("comment", ""),
                     }
                     for z in items
@@ -2823,6 +2923,8 @@ def manage_dns_zone(
                         "id": z.get("id"),
                         "fqdn": z.get("fqdn"),
                         "forward_only": z.get("forward_only"),
+                        "view": z.get("view"),
+                        "view_name": view_name_map.get(z.get("view", ""), ""),
                         "comment": z.get("comment", ""),
                     }
                     for z in items
@@ -2843,6 +2945,7 @@ def manage_dns_zone(
                         "fqdn": z.get("fqdn"),
                         "primary_type": z.get("primary_type", ""),
                         "view": z.get("view"),
+                        "view_name": view_name_map.get(z.get("view", ""), ""),
                         "comment": z.get("comment", ""),
                     }
                     for z in items
@@ -2853,6 +2956,7 @@ def manage_dns_zone(
                         "id": d.get("id"),
                         "fqdn": d.get("fqdn"),
                         "view": d.get("view"),
+                        "view_name": view_name_map.get(d.get("view", ""), ""),
                         "comment": d.get("comment", ""),
                     }
                     for d in items
@@ -2906,6 +3010,35 @@ def manage_dns_zone(
                 return intent_response("success", f"Retrieved {resource_type}", steps, result=result)
 
         elif action == "create":
+            # Safety: honor dry_run on every create path. The server contract promises
+            # dry_run applies to all destructive ops — create, update, and delete.
+            if dry_run:
+                target = fqdn or name
+                if not target:
+                    return intent_response(
+                        "failed",
+                        "Create requires 'fqdn' (zones, delegations, RPZ) or 'name' (views, ACLs, NSGs, servers).",
+                        steps,
+                    )
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create {resource_type} '{target}'" + (f" in view '{view}'" if view else ""),
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "fqdn": fqdn,
+                        "name": name,
+                        "view": view,
+                        "primary_type": primary_type,
+                        "comment": comment,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_dns_zone(action='create', resource_type='{resource_type}', ..., dry_run=False)"
+                    ],
+                )
+
             if resource_type == "dns_view":
                 if not name:
                     return intent_response("failed", "DNS view create requires 'name'.", steps)
@@ -3021,6 +3154,26 @@ def manage_dns_zone(
                 return intent_response(
                     "failed", "No update fields provided. Set comment, name, disabled, or tags.", steps
                 )
+
+            # Safety: dry-run preview before any mutating API call.
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would update {resource_type} {resource_id}",
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "resource_id": resource_id,
+                        "updates": updates,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been updated. Set dry_run=False to apply."],
+                    next_actions=[
+                        f"Execute: manage_dns_zone(action='update', resource_type='{resource_type}', "
+                        f"resource_id={resource_id!r}, ..., dry_run=False)"
+                    ],
+                )
+
             if resource_type == "dns_global":
                 if not resource_id:
                     g = client.get_dns_global()
@@ -3229,6 +3382,17 @@ def manage_rpz_policies(
                 return intent_response("failed", "Create requires 'name' (trigger FQDN).", steps)
             if not rdata:
                 return intent_response("failed", "Create requires 'rdata' (response data dict).", steps)
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create RPZ rule '{name}' in zone {zone}",
+                    steps,
+                    result={"name": name, "zone": zone, "rdata": rdata, "comment": comment, "dry_run": True},
+                    warnings=["This is a DRY RUN. No rule has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_rpz_policies(action='create', zone={zone!r}, name={name!r}, rdata=..., dry_run=False)"
+                    ],
+                )
             resp = client.create_rpz_rule(name=name, zone=zone, rdata=rdata, comment=comment)
             result = resp.get("result", resp)
             steps.append(step_result("Create RPZ rule", "success", {"id": result.get("id"), "name": name}))
@@ -3250,6 +3414,17 @@ def manage_rpz_policies(
                 return intent_response(
                     "failed", "No update fields provided. Set comment, name, disabled, or rdata.", steps
                 )
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would update RPZ rule {resource_id}",
+                    steps,
+                    result={"resource_id": resource_id, "updates": updates, "dry_run": True},
+                    warnings=["This is a DRY RUN. No rule has been updated. Set dry_run=False to apply."],
+                    next_actions=[
+                        f"Execute: manage_rpz_policies(action='update', resource_id={resource_id!r}, ..., dry_run=False)"
+                    ],
+                )
             resp = client.update_rpz_rule(resource_id, updates)
             result = resp.get("result", resp)
             steps.append(step_result("Update RPZ rule", "success", {"id": resource_id}))
@@ -3264,7 +3439,7 @@ def manage_rpz_policies(
                     result = resp.get("result", resp)
                     steps.append(step_result("Dry run: inspect RPZ rule", "success", result))
                 except Exception as e:
-                    steps.append(step_result("Dry run: inspect RPZ rule", "failed", error=str(e)))
+                    steps.append(step_result("Dry run: inspect RPZ rule", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete RPZ rule {resource_id}",
@@ -3386,7 +3561,7 @@ def manage_dnssec(
 
 @mcp.tool(annotations={"destructiveHint": True, "idempotentHint": False})
 def manage_dns_record(
-    action: Literal["update", "delete", "list", "get"],
+    action: Literal["create", "update", "delete", "list", "get"],
     record_id: str | None = None,
     zone: str | None = None,
     view: str | None = None,
@@ -3400,7 +3575,8 @@ def manage_dns_record(
 ) -> dict:
     """
     Update, delete, list, or get existing DNS records. Supports smart lookup by name+zone+type.
-    USE THIS for record lifecycle after creation. For creating new records use provision_dns().
+    USE THIS for record lifecycle after creation. For creating new records use provision_dns()
+    (or call this with action="create" — it routes there automatically and explains why).
     For zone management use manage_dns_zone().
 
     Args:
@@ -3433,6 +3609,21 @@ def manage_dns_record(
             next_actions=[
                 "Run check_api_health() to verify connectivity",
                 "Ensure INFOBLOX_API_KEY is set in environment or .env file",
+            ],
+        )
+
+    # Route create → provision_dns instead of failing with a cryptic literal_error.
+    # The intent-layer design keeps "manage existing" and "provision new" on different
+    # tools, but the agent's mental model often lumps them together. Rather than surface
+    # a schema error, return a clear hand-off that tells the agent exactly what to call.
+    if action == "create":
+        return intent_response(
+            "failed",
+            "Record creation is handled by a different tool.",
+            next_actions=[
+                "Use provision_dns() to create records. Example: "
+                "provision_dns(zone=..., name=..., record_type='A', value='10.0.0.1')",
+                "provision_dns supports dry_run=True (default) for previews, then dry_run=False to execute.",
             ],
         )
 
@@ -3546,7 +3737,7 @@ def manage_dns_record(
                     result = resp.get("result", resp)
                     steps.append(step_result("Dry run: inspect record", "success", result))
                 except Exception as e:
-                    steps.append(step_result("Dry run: inspect record", "failed", error=str(e)))
+                    steps.append(step_result("Dry run: inspect record", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete DNS record {rid}",
@@ -3804,6 +3995,27 @@ def manage_dhcp(
             return intent_response("success", f"Retrieved {resource_type}", steps, result=result)
 
         elif action == "create":
+            # Safety: honor dry_run on every create path. Previously all paths (ha_group,
+            # option_code, hardware_filter, option_filter, hardware) bypassed the flag.
+            if dry_run:
+                target = name or (mac_address if resource_type == "hardware" else None) or "<unspecified>"
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create {resource_type} '{target}'",
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "name": name,
+                        "mac_address": mac_address,
+                        "comment": comment,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_dhcp(action='create', resource_type='{resource_type}', ..., dry_run=False)"
+                    ],
+                )
+
             if resource_type == "ha_group":
                 if not name or not mode:
                     return intent_response("failed", "HA group create requires 'name' and 'mode'.", steps)
@@ -3898,7 +4110,7 @@ def manage_dhcp(
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
                 except Exception as e:
-                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -4177,6 +4389,21 @@ def manage_ip_reservation(
                 kwargs["match_value"] = mac
             if hostname:
                 kwargs["name"] = hostname
+
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would reserve IP {address} in space '{space}'",
+                    steps,
+                    result={"address": address, "space": space, "mac": mac, "hostname": hostname, "dry_run": True},
+                    warnings=warnings + ["This is a DRY RUN. No IP has been reserved. Set dry_run=False to actually reserve."],
+                    next_actions=[
+                        f"Execute: manage_ip_reservation(action='reserve', address={address!r}, space={space!r}"
+                        + (f", mac={mac!r}" if mac else "")
+                        + (f", hostname={hostname!r}" if hostname else "")
+                        + ", dry_run=False)"
+                    ],
+                )
 
             resp = client.create_fixed_address(address=address, space=space_id, comment=comment, **kwargs)
             result = resp.get("result", resp)
@@ -4528,6 +4755,28 @@ def manage_security_policy(
         elif action == "create":
             if not name:
                 return intent_response("failed", "Create requires 'name'.", steps)
+
+            # Safety: honor dry_run on create paths that previously bypassed it.
+            # named_list, app_filter, internal_domains, access_code, category_filter were
+            # missing the guard; policy and policy_rule already have their own dry_run
+            # blocks further below so we exclude them here to avoid double-firing.
+            if dry_run and resource_type not in ("policy", "policy_rule"):
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create security {resource_type} '{name}'",
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "name": name,
+                        "description": description,
+                        "items": items,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_security_policy(action='create', resource_type='{resource_type}', name={name!r}, ..., dry_run=False)"
+                    ],
+                )
 
             if resource_type == "named_list":
                 resp = atcfw_client.create_named_list(
@@ -4923,6 +5172,28 @@ def manage_federation(
             return intent_response("success", f"Retrieved {resource_type}", steps, result=result)
 
         elif action == "create":
+            # Safety: honor dry_run before any realm resolution or API call.
+            if dry_run:
+                target = name or address or "<unspecified>"
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create {resource_type} '{target}'",
+                    steps,
+                    result={
+                        "resource_type": resource_type,
+                        "name": name,
+                        "address": address,
+                        "realm": realm,
+                        "delegated_to": delegated_to,
+                        "comment": comment,
+                        "dry_run": True,
+                    },
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_federation(action='create', resource_type='{resource_type}', ..., dry_run=False)"
+                    ],
+                )
+
             # Resolve realm if needed
             realm_id = None
             if realm and resource_type != "realm":
@@ -5013,7 +5284,7 @@ def manage_federation(
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
                 except Exception as e:
-                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -5147,6 +5418,17 @@ def manage_dtc(
         elif action == "create":
             if not name:
                 return intent_response("failed", "Create requires 'name'.", steps)
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would create DTC {resource_type} '{name}'",
+                    steps,
+                    result={"resource_type": resource_type, "name": name, "comment": comment, "dry_run": True},
+                    warnings=["This is a DRY RUN. No resource has been created. Set dry_run=False to actually create."],
+                    next_actions=[
+                        f"Execute: manage_dtc(action='create', resource_type='{resource_type}', name={name!r}, dry_run=False)"
+                    ],
+                )
 
             if resource_type == "lbdn":
                 resp = client.create_lbdn(name=name, view=view, dtc_policy=dtc_policy, comment=comment)
@@ -5171,6 +5453,14 @@ def manage_dtc(
                 updates["name"] = name
             if not updates:
                 return intent_response("failed", "No update fields provided.", steps)
+            if dry_run:
+                return intent_response(
+                    "success",
+                    f"DRY RUN: Would update DTC {resource_type} {resource_id}",
+                    steps,
+                    result={"resource_type": resource_type, "resource_id": resource_id, "updates": updates, "dry_run": True},
+                    warnings=["This is a DRY RUN. No resource has been updated. Set dry_run=False to apply."],
+                )
             resp = dispatch[resource_type]["update"](resource_id, updates)
             result = resp.get("result", resp)
             steps.append(step_result(f"Update {resource_type}", "success", {"id": resource_id}))
@@ -5185,7 +5475,7 @@ def manage_dtc(
                     result = resp.get("result", resp)
                     steps.append(step_result(f"Dry run: inspect {resource_type}", "success", result))
                 except Exception as e:
-                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=str(e)))
+                    steps.append(step_result(f"Dry run: inspect {resource_type}", "failed", error=_clean_error(e)))
                 return intent_response(
                     "success",
                     f"DRY RUN: Would delete {resource_type} {resource_id}",
@@ -5639,7 +5929,7 @@ def resource_ip_spaces() -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": _clean_error(e)})
 
 
 @mcp.resource("infoblox://zones")
@@ -5663,7 +5953,7 @@ def resource_dns_zones() -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": _clean_error(e)})
 
 
 # ==================== MCP Resource Templates ====================
@@ -5696,7 +5986,7 @@ def resource_space_subnets(space_name: str) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": _clean_error(e)})
 
 
 @mcp.resource("infoblox://zones/{zone_fqdn}/records")
@@ -5726,7 +6016,7 @@ def resource_zone_records(zone_fqdn: str) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": _clean_error(e)})
 
 
 @mcp.resource("infoblox://health")
@@ -5747,7 +6037,7 @@ def resource_health() -> str:
                     atcfw_client.list_security_policies(limit=1)
                 health[name] = {"status": "healthy", "latency_ms": round((_time.time() - start) * 1000)}
             except Exception as e:
-                health[name] = {"status": "error", "error": str(e)[:100]}
+                health[name] = {"status": "error", "error": _clean_error(e)[:100]}
         else:
             health[name] = {"status": "not_initialized"}
     return json.dumps(health, indent=2)

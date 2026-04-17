@@ -490,9 +490,11 @@ class TestManageDnsRecord:
         assert r["status"] == "success"
 
     async def test_invalid_action(self, mcp_server, mock_infoblox_client):
+        # "create" is now a valid action that routes to provision_dns with guidance.
+        # A truly invalid action must still raise a literal_error from the Pydantic schema.
         async with Client(mcp_server) as c:
             with pytest.raises(ToolError, match="literal_error"):
-                await c.call_tool("manage_dns_record", {"action": "create"})
+                await c.call_tool("manage_dns_record", {"action": "drop"})
 
     async def test_no_client(self, mcp_server, no_clients):
         async with Client(mcp_server) as c:
@@ -977,6 +979,7 @@ class TestManageSecurityPolicyExpanded:
                         "action": "create",
                         "name": "test-filter",
                         "categories": ["Malware", "Phishing"],
+                        "dry_run": False,
                     },
                 )
             )
@@ -1242,4 +1245,346 @@ class TestManageDoh:
         async with Client(mcp_server) as c:
             r = parse_tool_result(await c.call_tool("manage_doh", {"action": "create_doh_fqdn"}))
         assert r["status"] == "failed"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Cross-tool dry_run safety (prevents silent mutation on create/update)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDryRunSafetyContract:
+    """Regressions for the dry_run safety contract across every tool that
+    previously bypassed it. If any start failing it means a create or update
+    path is back to silently mutating real infrastructure."""
+
+    async def test_manage_dns_zone_create_dry_run(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_auth_zones.return_value = _api([])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "create", "fqdn": "probation.local", "view": "TEST"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_auth_zone.assert_not_called()
+
+    async def test_manage_dns_zone_update_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "update", "resource_type": "dns_view",
+                 "resource_id": "dns/view/abc", "comment": "new comment"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.update_dns_view.assert_not_called()
+
+    async def test_manage_network_create_subnet_dry_run(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_network",
+                {"action": "create", "resource_type": "subnet",
+                 "address": "10.0.0.0/24", "space": "prod"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_subnet.assert_not_called()
+
+    async def test_manage_network_create_address_block_dry_run(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_network",
+                {"action": "create", "resource_type": "address_block",
+                 "address": "10.0.0.0/16", "space": "prod"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_address_block.assert_not_called()
+
+    async def test_manage_network_create_range_dry_run(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_network",
+                {"action": "create", "resource_type": "range",
+                 "start": "10.0.0.10", "end": "10.0.0.20", "space": "prod"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_range.assert_not_called()
+
+    async def test_manage_ip_reservation_reserve_dry_run(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_ip_spaces.return_value = _api([SPACE])
+        mock_infoblox_client.list_addresses.return_value = _api([])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_ip_reservation",
+                {"action": "reserve", "address": "10.0.0.50", "space": "prod",
+                 "mac": "AA:BB:CC:DD:EE:FF", "hostname": "web-01"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_fixed_address.assert_not_called()
+
+    async def test_manage_dhcp_create_ha_group_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dhcp",
+                {"action": "create", "resource_type": "ha_group",
+                 "name": "ha-primary", "mode": "active-active"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_ha_group.assert_not_called()
+
+    async def test_manage_rpz_policies_create_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_rpz_policies",
+                {"action": "create", "zone": "dns/rpz/1", "name": "block.example.com",
+                 "rdata": {"address": "0.0.0.0"}},  # noqa: S104  sinkhole, not bind
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_rpz_rule.assert_not_called()
+
+    async def test_manage_rpz_policies_update_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_rpz_policies",
+                {"action": "update", "resource_id": "dns/rpz_rule/1", "comment": "new comment"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.update_rpz_rule.assert_not_called()
+
+    async def test_manage_federation_create_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_federation",
+                {"action": "create", "resource_type": "block",
+                 "address": "10.0.0.0/16", "realm": "realm-1"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_federated_block.assert_not_called()
+
+    async def test_manage_dtc_create_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dtc",
+                {"action": "create", "resource_type": "lbdn", "name": "lbdn-1"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.create_lbdn.assert_not_called()
+
+    async def test_manage_dtc_update_dry_run(self, mcp_server, mock_infoblox_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dtc",
+                {"action": "update", "resource_type": "lbdn",
+                 "resource_id": "dtc/lbdn/1", "comment": "new comment"},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_infoblox_client.update_lbdn.assert_not_called()
+
+    async def test_manage_security_policy_create_named_list_dry_run(self, mcp_server, mock_atcfw_client):
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_security_policy",
+                {"action": "create", "resource_type": "named_list",
+                 "name": "blocklist", "items": ["bad.example.com"]},
+            ))
+        assert r["status"] == "success"
+        assert "DRY RUN" in r["summary"]
+        mock_atcfw_client.create_named_list.assert_not_called()
+
+
+class TestAuthZoneDispatchFixes:
+    """Regressions for the two dispatch-table no-op bugs that were shipped in v2.1.0:
+    delete and update for auth_zone both had placeholder lambdas returning None,
+    so the tool claimed success while making no API call."""
+
+    async def test_delete_calls_real_api(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        mock_infoblox_client.list_dns_records.return_value = _api([])
+        mock_infoblox_client.delete_auth_zone.return_value = {}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "delete", "fqdn": "example.com", "dry_run": False},
+            ))
+        assert r["status"] == "success"
+        mock_infoblox_client.delete_auth_zone.assert_called_once_with("dns/auth_zone/1")
+
+    async def test_update_calls_real_api(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.update_auth_zone.return_value = {"result": {"id": "dns/auth_zone/1"}}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "update", "resource_type": "auth_zone",
+                 "resource_id": "dns/auth_zone/1", "comment": "updated", "dry_run": False},
+            ))
+        assert r["status"] == "success"
+        mock_infoblox_client.update_auth_zone.assert_called_once_with(
+            "dns/auth_zone/1", {"comment": "updated"}
+        )
+
+
+class TestViewFilterAndEnrichment:
+    """Regressions for manage_dns_zone view filter + view_name enrichment."""
+
+    async def test_list_threads_view_filter(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = _api([
+            {"id": "dns/view/abc-123", "name": "mycorp-primary"}
+        ])
+        mock_infoblox_client.list_auth_zones.return_value = _api([ZONE])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone", {"action": "list", "view": "mycorp-primary"}
+            ))
+        assert r["status"] == "success"
+        call = mock_infoblox_client.list_auth_zones.call_args
+        assert call is not None
+        assert call.kwargs.get("filter") == 'view=="dns/view/abc-123"'
+
+    async def test_list_enriches_view_name(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = _api([
+            {"id": "dns/view/9aca8356", "name": "TEST"},
+            {"id": "dns/view/d768b778", "name": "PROD"},
+        ])
+        mock_infoblox_client.list_auth_zones.return_value = _api([
+            {"id": "dns/auth_zone/1", "fqdn": "acme.corp.", "primary_type": "cloud",
+             "view": "dns/view/9aca8356", "comment": ""},
+            {"id": "dns/auth_zone/2", "fqdn": "acme.corp.", "primary_type": "cloud",
+             "view": "dns/view/d768b778", "comment": ""},
+        ])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool("manage_dns_zone", {"action": "list"}))
+        assert r["status"] == "success"
+        zones = r["result"]
+        assert zones[0]["view_name"] == "TEST"
+        assert zones[1]["view_name"] == "PROD"
+
+    async def test_view_not_found_lists_available(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.side_effect = [
+            _api([]),
+            _api([]),
+            _api([
+                {"id": "dns/view/1", "name": "TEST"},
+                {"id": "dns/view/2", "name": "internal"},
+                {"id": "dns/view/3", "name": "external"},
+            ]),
+        ]
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone", {"action": "list", "view": "dfault"}
+            ))
+        assert r["status"] == "failed"
+        summary = r["summary"]
+        assert "TEST" in summary and "internal" in summary and "external" in summary
+        assert "Available views" in summary
+
+
+class TestManageDnsRecordCreateRouting:
+    async def test_create_routes_to_provision_dns(self, mcp_server, mock_infoblox_client):
+        """Regression: action='create' on manage_dns_record must return a helpful
+        routing error pointing at provision_dns, not a generic literal_error."""
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_record", {"action": "create", "zone": "acme.corp"}
+            ))
+        assert r["status"] == "failed"
+        assert "provision_dns" in " ".join(r.get("next_actions", []))
+
+
+class TestResolveZoneViewDisambiguation:
+    """Regressions for resolve_zone error paths — when zone is not in requested
+    view but IS in other views, the error must list those views."""
+
+    async def test_zone_not_in_view_lists_views_with_zone(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = _api([
+            {"id": "dns/view/default-id", "name": "default"},
+            {"id": "dns/view/test-id", "name": "TEST"},
+            {"id": "dns/view/prod-id", "name": "PROD"},
+        ])
+        mock_infoblox_client.list_auth_zones.return_value = _api([
+            {"id": "dns/auth_zone/1", "fqdn": "acme.corp.", "view": "dns/view/test-id"},
+            {"id": "dns/auth_zone/2", "fqdn": "acme.corp.", "view": "dns/view/prod-id"},
+        ])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "provision_dns",
+                {"zone": "acme.corp", "view": "default", "name": "testapp",
+                 "record_type": "A", "value": "10.0.0.1"},
+            ))
+        assert r["status"] == "failed"
+        summary = r["summary"]
+        assert "TEST" in summary
+        assert "PROD" in summary
+        assert "not in view 'default'" in summary or "not in view \"default\"" in summary
+
+    async def test_ambiguous_zone_uses_view_names_not_uuids(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_auth_zones.return_value = _api([
+            {"id": "dns/auth_zone/1", "fqdn": "acme.corp.", "view": "dns/view/test-id"},
+            {"id": "dns/auth_zone/2", "fqdn": "acme.corp.", "view": "dns/view/prod-id"},
+        ])
+        mock_infoblox_client.list_dns_views.return_value = _api([
+            {"id": "dns/view/test-id", "name": "TEST"},
+            {"id": "dns/view/prod-id", "name": "PROD"},
+        ])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "provision_dns",
+                {"zone": "acme.corp", "name": "testapp", "record_type": "A", "value": "10.0.0.1"},
+            ))
+        assert r["status"] == "failed"
+        summary = r["summary"]
+        assert "TEST" in summary
+        assert "PROD" in summary
+        assert "dns/view/" not in summary
+
+
+class TestCleanErrorHelper:
+    """Unit tests for _clean_error() — strips HTML / secrets / over-long strings."""
+
+    def test_html_error_extracts_title(self):
+        from mcp_intent import _clean_error
+        html = """<html><head><title>401 Authorization Required</title></head>
+        <body><center><h1>401 Authorization Required</h1></center></body></html>"""
+        assert _clean_error(Exception(html)) == "401 Authorization Required"
+
+    def test_bearer_token_censored(self):
+        from mcp_intent import _clean_error
+        msg = "401 Client Error: Bearer abc123def456xyz is invalid"
+        assert "abc123def456xyz" not in _clean_error(Exception(msg))
+        assert "Bearer ***" in _clean_error(Exception(msg))
+
+    def test_api_key_param_censored(self):
+        from mcp_intent import _clean_error
+        msg = "Request failed: api_key=sk-secret123 not recognized"
+        cleaned = _clean_error(Exception(msg))
+        assert "sk-secret123" not in cleaned
+        assert "api_key=***" in cleaned
+
+    def test_long_hex_censored(self):
+        from mcp_intent import _clean_error
+        msg = "Secret: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 was rotated"
+        cleaned = _clean_error(Exception(msg))
+        assert "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4" not in cleaned
+
+    def test_long_message_truncated(self):
+        from mcp_intent import _clean_error
+        long_msg = "X" * 500
+        cleaned = _clean_error(Exception(long_msg))
+        assert len(cleaned) <= 290
+        assert cleaned.endswith("…")
+
+    def test_short_message_passthrough(self):
+        from mcp_intent import _clean_error
+        assert _clean_error(Exception("Connection refused")) == "Connection refused"
 
