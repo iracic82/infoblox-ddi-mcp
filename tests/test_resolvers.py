@@ -103,8 +103,14 @@ class TestResolveZone:
         assert err == ""
 
     def test_with_view_no_match(self, mock_infoblox_client):
-        """When view is specified but zone doesn't exist in that view."""
-        mock_infoblox_client.list_dns_views.return_value = {"results": [{"id": "dns/view/default", "name": "default"}]}
+        """When view is specified but zone doesn't exist in that view,
+        the error must list the views that DO contain the zone."""
+        mock_infoblox_client.list_dns_views.return_value = {
+            "results": [
+                {"id": "dns/view/default", "name": "default"},
+                {"id": "dns/view/azure", "name": "azure"},
+            ]
+        }
         mock_infoblox_client.list_auth_zones.return_value = {
             "results": [
                 {"id": "dns/auth_zone/1", "fqdn": "example.com.", "view": "dns/view/azure"},
@@ -112,7 +118,9 @@ class TestResolveZone:
         }
         zone_id, step, err = resolve_zone("example.com", view="default")
         assert zone_id is None
-        assert "not found in view" in err
+        assert "not in view 'default'" in err
+        # The richer message must also list the view that DOES have the zone
+        assert "azure" in err
 
     def test_multiple_views_no_view_specified(self, mock_infoblox_client):
         """When multiple zones match and no view is specified, return error listing views."""

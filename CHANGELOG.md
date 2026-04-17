@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-17
+
+### Fixed — Critical safety
+
+- **`dry_run=True` bypassed on 7 tools** (silent mutation bug). `create` and
+  `update` actions across `manage_dns_zone`, `manage_network` (subnet/address_block/range),
+  `manage_ip_reservation` (reserve), `manage_dhcp`, `manage_rpz_policies`,
+  `manage_federation`, `manage_dtc`, and `manage_security_policy` were calling
+  the real Infoblox API regardless of the `dry_run` flag. All paths now preview
+  before mutation. `dry_run=False` must be explicit to execute.
+- **`manage_dns_zone` silent no-ops** — `action="delete"` and `action="update"`
+  for `resource_type="auth_zone"` were wired to placeholder lambdas that returned
+  `None`, claiming success without calling the API. Now dispatch to real
+  `delete_auth_zone` and `update_auth_zone` client methods. `forward_zone` also
+  got its missing `delete` and `update` dispatch entries.
+- **`manage_dns_zone(action="list", view=...)` ignored the view filter** and
+  returned zones from every view. Now threads the view into a `filter` query.
+- **Exception-string leakage in error responses** — 50+ sites were returning
+  raw `str(e)` in tool output, risking leaks of HTML error pages, stack traces,
+  and patterns that resemble credentials. A new `_clean_error()` utility strips
+  HTML, censors Bearer tokens and `api_key=...` patterns, censors long hex
+  strings, and truncates to 280 chars.
+
+### Added — UX improvements
+
+- **`view_name` on zone/delegation list responses** — each row now carries
+  `view_name` alongside `view` UUID so agents can disambiguate split-horizon
+  zones without a follow-up `list_dns_views` call.
+- **Rich "view not found" errors** — when `resolve_view()` fails, the error
+  lists every configured view name plus the closest fuzzy match. A typo like
+  `view="dfault"` now gets `"Available views: default, TEST, PROD. Closest
+  match: 'default'."` instead of just `"DNS view 'dfault' not found"`.
+- **"Zone not in view" errors** — when a zone exists but not in the requested
+  view, `resolve_zone()` now tells the caller which views DO contain the zone
+  (e.g. `"Zone 'acme.corp' exists, but not in view 'default'. It IS in views:
+  TEST, PROD."`).
+- **Ambiguity errors use view names** — when a zone exists in multiple views,
+  the error shows view names instead of raw UUIDs.
+- **`manage_dns_record(action="create")` routes to `provision_dns`** — instead
+  of a cryptic `literal_error`, callers now get a clear hand-off: the `action`
+  Literal widened to include `"create"`, with a short-circuit that tells the
+  agent to call `provision_dns()` instead.
+
+### Added — Tests
+
+- 27 new regression tests covering every fix above:
+  - `TestDryRunSafetyContract` — 13 tests, one per affected tool/action
+  - `TestAuthZoneDispatchFixes` — delete + update no-op regressions
+  - `TestViewFilterAndEnrichment` — view filter and view_name enrichment
+  - `TestResolveZoneViewDisambiguation` — zone-not-in-view + ambiguity
+  - `TestManageDnsRecordCreateRouting` — create routing
+  - `TestCleanErrorHelper` — HTML stripping, secret censoring, truncation
+
+### Changed
+
+- `manage_dns_zone` docstring updated: "ALL mutating actions (create, update,
+  delete) default to `dry_run=True`" (previously only mentioned delete).
+- Version bumped from 2.1.0 to 2.2.0.
+
 ## [2.1.0] - 2026-04-11
 
 ### Added
