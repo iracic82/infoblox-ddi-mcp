@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-04-17
+
+### Fixed
+
+- **`mcp_intent.py` missing from the PyPI wheel** (pre-existing packaging bug,
+  present since at least v2.1.0). The wheel shipped `services/` but not the
+  top-level module that the console entry point `infoblox-ddi-mcp` imports,
+  so `pip install infoblox-ddi-mcp && infoblox-ddi-mcp` failed with
+  `ModuleNotFoundError: No module named 'mcp_intent'`. Fixed by switching
+  from hatchling's `include` filter (which only prunes an already-selected
+  set) to `[tool.hatch.build.targets.wheel.force-include]`, which explicitly
+  adds the top-level module to the wheel root.
+
 ## [2.2.0] - 2026-04-17
 
 ### Fixed — Critical safety
