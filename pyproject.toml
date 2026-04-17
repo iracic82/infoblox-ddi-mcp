@@ -1,6 +1,6 @@
 [project]
 name = "infoblox-ddi-mcp"
-version = "2.2.0"
+version = "2.2.1"
 description = "Infoblox DDI MCP Server — 26 intent-level workflow tools for agentic AI integration"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
@@ -38,7 +38,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["services"]
-include = ["mcp_intent.py", "services/"]
+
+# mcp_intent.py is a top-level single-module file (not a package). Hatchling's
+# `include` filter doesn't add files that aren't already selected by a package
+# or build target — it only filters an existing set. We need `force-include`
+# to explicitly pull the top-level module into the wheel root. Without this,
+# `pip install infoblox-ddi-mcp` succeeds but the console entry point fails at
+# import time with ModuleNotFoundError on `mcp_intent`.
+[tool.hatch.build.targets.wheel.force-include]
+"mcp_intent.py" = "mcp_intent.py"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "pre-commit>=4.0"]
