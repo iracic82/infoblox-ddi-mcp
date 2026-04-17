@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-04-17
+
+### Fixed
+
+- **`view` name not resolved to UUID on create paths.** When creating an
+  auth_zone, forward_zone, RPZ zone, delegation, or DTC LBDN with a human-readable
+  `view` name (e.g. `view="default"`), the name was passed straight to the
+  Infoblox API, which expects a `dns/view/<uuid>` identifier. Result: HTTP 500
+  from the API — `pq: invalid input syntax for type uuid: "default"` — and no
+  resource created. The zone *list*, *get*, and *delete* paths already resolved
+  view names via `resolve_view()`; the create paths never did. Now all
+  view-accepting create paths resolve the name to a UUID first, surfacing a
+  clear error if the view doesn't exist.
+- Caught by real-API smoke test against the installed v2.2.1 wheel. Affected
+  resource types: `auth_zone`, `forward_zone`, `rpz`, `delegation` in
+  `manage_dns_zone`; `lbdn` in `manage_dtc`.
+
 ## [2.2.1] - 2026-04-17
 
 ### Fixed
