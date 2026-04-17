@@ -21,7 +21,7 @@ import sys
 
 import structlog
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 
 # CRITICAL: Configure structlog to use stderr BEFORE importing service clients.
 # In stdio transport mode, stdout is reserved exclusively for JSON-RPC protocol messages.
@@ -3037,6 +3037,18 @@ def manage_dns_zone(
                     ],
                 )
 
+            # Resolve view name → UUID once for all view-scoped create paths.
+            # The Infoblox API expects `view` as a dns/view/<uuid> identifier and
+            # returns HTTP 500 "invalid input syntax for type uuid" if given a
+            # plain name. dns_view creates don't use a view, so skip for that.
+            view_id = None
+            if view and resource_type != "dns_view":
+                view_id, v_step, v_err = resolve_view(view)
+                if v_step:
+                    steps.append(v_step)
+                if v_err:
+                    return intent_response("failed", v_err, steps)
+
             if resource_type == "dns_view":
                 if not name:
                     return intent_response("failed", "DNS view create requires 'name'.", steps)
@@ -3084,7 +3096,7 @@ def manage_dns_zone(
                 if not fqdn:
                     return intent_response("failed", "Delegation create requires 'fqdn'.", steps)
                 resp = client.create_dns_delegation(
-                    fqdn=fqdn, delegation_servers=delegation_servers, view=view, comment=comment
+                    fqdn=fqdn, delegation_servers=delegation_servers, view=view_id, comment=comment
                 )
                 result = resp.get("result", resp)
                 steps.append(step_result("Create delegation", "success", {"id": result.get("id"), "fqdn": fqdn}))
@@ -3095,7 +3107,7 @@ def manage_dns_zone(
                     return intent_response("failed", "RPZ create requires 'fqdn' or 'name'.", steps)
                 zone_fqdn = fqdn or name
                 resp = client.create_rpz_zone(
-                    name=zone_fqdn, primary_type=primary_type or "cloud", view=view, comment=comment
+                    name=zone_fqdn, primary_type=primary_type or "cloud", view=view_id, comment=comment
                 )
                 result = resp.get("result", resp)
                 steps.append(step_result("Create RPZ zone", "success", {"id": result.get("id"), "fqdn": zone_fqdn}))
@@ -3118,10 +3130,11 @@ def manage_dns_zone(
                         "failed", f"Zone '{fqdn}' already exists (ID: {existing[0].get('id')})", steps
                     )
 
+                # view_id is resolved once at the top of the create branch above.
                 if resource_type == "auth_zone":
                     kwargs = {}
-                    if view:
-                        kwargs["view"] = view
+                    if view_id:
+                        kwargs["view"] = view_id
                     resp = client.create_auth_zone(
                         fqdn=fqdn, primary_type=primary_type or "cloud", comment=comment, **kwargs
                     )
@@ -3130,7 +3143,7 @@ def manage_dns_zone(
                     return intent_response("success", f"Authoritative zone '{fqdn}' created", steps, result=result)
                 else:
                     resp = client.create_forward_zone(
-                        fqdn=fqdn, forward_only=True, hosts=forward_to, view=view, comment=comment
+                        fqdn=fqdn, forward_only=True, hosts=forward_to, view=view_id, comment=comment
                     )
                     result = resp.get("result", resp)
                     steps.append(step_result("Create forward zone", "success", {"id": result.get("id"), "fqdn": fqdn}))
@@ -5430,7 +5443,15 @@ def manage_dtc(
                 )
 
             if resource_type == "lbdn":
-                resp = client.create_lbdn(name=name, view=view, dtc_policy=dtc_policy, comment=comment)
+                # Resolve view name → UUID (same UUID-vs-name gotcha as DNS zones)
+                view_id_lbdn = None
+                if view:
+                    view_id_lbdn, v_step, v_err = resolve_view(view)
+                    if v_step:
+                        steps.append(v_step)
+                    if v_err:
+                        return intent_response("failed", v_err, steps)
+                resp = client.create_lbdn(name=name, view=view_id_lbdn, dtc_policy=dtc_policy, comment=comment)
             elif resource_type == "pool":
                 resp = client.create_dtc_pool(name=name, comment=comment)
             elif resource_type == "server":

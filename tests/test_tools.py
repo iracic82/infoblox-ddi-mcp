@@ -1252,6 +1252,50 @@ class TestManageDoh:
 # ═══════════════════════════════════════════════════════════════════
 
 
+class TestCreateResolvesViewNameToUuid:
+    """Regression for v2.2.2: create paths used to pass the human-readable
+    view name straight to the API, which returned HTTP 500. Every create path
+    that accepts a `view` argument must resolve the name to a UUID first."""
+
+    async def test_auth_zone_create_resolves_view_name(self, mcp_server, mock_infoblox_client):
+        mock_infoblox_client.list_dns_views.return_value = _api([
+            {"id": "dns/view/abc-123", "name": "default"}
+        ])
+        mock_infoblox_client.list_auth_zones.return_value = _api([])
+        mock_infoblox_client.create_auth_zone.return_value = {"result": {"id": "dns/auth_zone/new"}}
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "create", "fqdn": "test.example", "view": "default", "dry_run": False},
+            ))
+        assert r["status"] == "success"
+        call = mock_infoblox_client.create_auth_zone.call_args
+        assert call.kwargs.get("view") == "dns/view/abc-123", (
+            f"create_auth_zone got view={call.kwargs.get('view')!r}, "
+            "expected the resolved UUID 'dns/view/abc-123' — not the raw name"
+        )
+
+    async def test_unknown_view_name_fails_before_create(self, mcp_server, mock_infoblox_client):
+        """When the view name doesn't exist, must fail cleanly with guidance
+        and NOT call create_auth_zone at all."""
+        # First two calls (exact-match + fuzzy filter) return empty; third call
+        # (unfiltered, used by the error-building path) returns the real view list.
+        mock_infoblox_client.list_dns_views.side_effect = [
+            _api([]),
+            _api([]),
+            _api([{"id": "dns/view/abc", "name": "TEST"}]),
+        ]
+        mock_infoblox_client.list_auth_zones.return_value = _api([])
+        async with Client(mcp_server) as c:
+            r = parse_tool_result(await c.call_tool(
+                "manage_dns_zone",
+                {"action": "create", "fqdn": "test.example", "view": "nonexistent", "dry_run": False},
+            ))
+        assert r["status"] == "failed"
+        assert "Available views" in r["summary"]
+        mock_infoblox_client.create_auth_zone.assert_not_called()
+
+
 class TestDryRunSafetyContract:
     """Regressions for the dry_run safety contract across every tool that
     previously bypassed it. If any start failing it means a create or update
