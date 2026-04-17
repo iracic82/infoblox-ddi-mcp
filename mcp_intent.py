@@ -134,6 +134,7 @@ def _clean_error(e: Exception | str) -> str:
       - Obvious credential patterns — censor Bearer tokens and long hex/base64 strings
     """
     import re
+
     msg = str(e)
 
     # Collapse HTML error pages to title / first text line
@@ -349,9 +350,7 @@ def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
             if not in_view:
                 # Zone exists, but not in the requested view. Tell them which views DO have it.
                 view_name_map = _dns_view_name_map()
-                found_in = sorted(
-                    {view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones}
-                )
+                found_in = sorted({view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones})
                 err = (
                     f"Zone '{zone_fqdn}' exists, but not in view '{view}'. "
                     f"It IS in views: {', '.join(found_in)}. "
@@ -365,9 +364,7 @@ def resolve_zone(zone_fqdn: str, view: str | None = None) -> tuple:
         # Surface view NAMES (not raw UUIDs) so the caller can immediately pick.
         if len(zones) > 1 and not view_id:
             view_name_map = _dns_view_name_map()
-            view_names = sorted(
-                {view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones}
-            )
+            view_names = sorted({view_name_map.get(z.get("view", ""), z.get("view", "unknown")) for z in zones})
             err = (
                 f"Zone '{zone_fqdn}' exists in {len(zones)} views: {', '.join(view_names)}. "
                 f"Specify a view to disambiguate (e.g. view='{view_names[0]}')."
@@ -403,6 +400,7 @@ def resolve_view(view_name: str) -> tuple:
             )
         # Not found — surface every available view so the caller knows what to pick
         import difflib
+
         view_map = _dns_view_name_map()
         available = sorted(n for n in view_map.values() if n)
         closest = difflib.get_close_matches(view_name, available, n=1, cutoff=0.4)
@@ -4396,7 +4394,8 @@ def manage_ip_reservation(
                     f"DRY RUN: Would reserve IP {address} in space '{space}'",
                     steps,
                     result={"address": address, "space": space, "mac": mac, "hostname": hostname, "dry_run": True},
-                    warnings=warnings + ["This is a DRY RUN. No IP has been reserved. Set dry_run=False to actually reserve."],
+                    warnings=warnings
+                    + ["This is a DRY RUN. No IP has been reserved. Set dry_run=False to actually reserve."],
                     next_actions=[
                         f"Execute: manage_ip_reservation(action='reserve', address={address!r}, space={space!r}"
                         + (f", mac={mac!r}" if mac else "")
@@ -5458,7 +5457,12 @@ def manage_dtc(
                     "success",
                     f"DRY RUN: Would update DTC {resource_type} {resource_id}",
                     steps,
-                    result={"resource_type": resource_type, "resource_id": resource_id, "updates": updates, "dry_run": True},
+                    result={
+                        "resource_type": resource_type,
+                        "resource_id": resource_id,
+                        "updates": updates,
+                        "dry_run": True,
+                    },
                     warnings=["This is a DRY RUN. No resource has been updated. Set dry_run=False to apply."],
                 )
             resp = dispatch[resource_type]["update"](resource_id, updates)
